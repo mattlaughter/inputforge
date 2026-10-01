@@ -564,15 +564,11 @@ fn handle_batch(
                 let v = match axis {
                     RelativeAxisCode::REL_X => scale(&mut src.acc_x, value, pointer),
                     RelativeAxisCode::REL_Y => scale(&mut src.acc_y, value, pointer),
-                    RelativeAxisCode::REL_WHEEL => {
-                        inv * scale(&mut src.acc_wheel, value, scroll)
-                    }
+                    RelativeAxisCode::REL_WHEEL => inv * scale(&mut src.acc_wheel, value, scroll),
                     RelativeAxisCode::REL_WHEEL_HI_RES => {
                         inv * scale(&mut src.acc_wheel_hr, value, scroll)
                     }
-                    RelativeAxisCode::REL_HWHEEL => {
-                        scale(&mut src.acc_hwheel, value, scroll)
-                    }
+                    RelativeAxisCode::REL_HWHEEL => scale(&mut src.acc_hwheel, value, scroll),
                     RelativeAxisCode::REL_HWHEEL_HI_RES => {
                         scale(&mut src.acc_hwheel_hr, value, scroll)
                     }

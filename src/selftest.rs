@@ -92,7 +92,8 @@ pub fn run() -> anyhow::Result<bool> {
         KeyCode::KEY_F18,
         KeyCode::KEY_F19,
         KeyCode::BTN_LEFT,
-        KeyCode::new(0x118), // G600-style extra button (G9+)
+        KeyCode::new(0x118),   // G600-style extra button (G9+)
+        KeyCode::KEY_LEFTCTRL, // first half of the cross-node emergency chord
     ]
     .into_iter()
     .collect();

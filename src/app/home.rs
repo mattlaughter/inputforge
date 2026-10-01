@@ -1056,7 +1056,6 @@ impl App {
         });
     }
 
-
     // ── settings ──
     pub(super) fn ui_settings(&mut self, ui: &mut egui::Ui, page: SettingsPage) {
         let c = self.colors;
