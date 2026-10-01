@@ -40,7 +40,7 @@ pub fn all_key_names() -> &'static [String] {
 
 /// True if this code is a mouse/pointer button (BTN_LEFT..BTN_TASK).
 pub fn is_mouse_button(k: KeyCode) -> bool {
-    (0x110..=0x117).contains(&k.code())
+    (0x110..=0x11f).contains(&k.code())
 }
 
 /// Map a character to (key, needs_shift) for a US QWERTY layout.

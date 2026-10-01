@@ -91,6 +91,7 @@ pub fn run() -> anyhow::Result<bool> {
         KeyCode::KEY_F18,
         KeyCode::KEY_F19,
         KeyCode::BTN_LEFT,
+        KeyCode::new(0x118), // G600-style extra button (G9+)
     ]
     .into_iter()
     .collect();
@@ -240,6 +241,19 @@ pub fn run() -> anyhow::Result<bool> {
     all &= check(
         "pointer speed ×2 (5,-3 → 10,-6)",
         got == [(0, 10), (1, -6)],
+        &got,
+    );
+
+    key(&mut src, KeyCode::new(0x118), 1);
+    key(&mut src, KeyCode::new(0x118), 0);
+    let got: Vec<(u16, i32)> = drain(&mut vp, Duration::from_millis(200))
+        .iter()
+        .filter(|e| e.event_type() == EventType::KEY)
+        .map(|e| (e.code(), e.value()))
+        .collect();
+    all &= check(
+        "extra mouse button 0x118 passes through",
+        got == [(0x118, 1), (0x118, 0)],
         &got,
     );
 

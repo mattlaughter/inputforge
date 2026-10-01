@@ -203,6 +203,26 @@ impl App {
                 self.engine = Some(e);
                 self.engine_devices = self.enabled_device_keys();
                 self.error = None;
+                // Keep System Settings' mouse options applying to grabbed mice.
+                let mice: Vec<String> =
+                    self.devices
+                        .iter()
+                        .filter(|d| {
+                            d.kind == devices::DeviceKind::Mouse
+                                && self.cfg.devices.iter().any(|c| {
+                                    c.enabled && c.key() == (d.name.clone(), d.phys.clone())
+                                })
+                        })
+                        .map(|d| d.name.clone())
+                        .collect();
+                if !mice.is_empty() {
+                    let shared = self.shared.clone();
+                    std::thread::spawn(move || {
+                        if let Some(msg) = crate::desktop::mirror_pointer_settings(&mice) {
+                            shared.lock().unwrap().push_log(msg);
+                        }
+                    });
+                }
             }
             Err(e) => self.error = Some(e.to_string()),
         }

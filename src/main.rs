@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod desktop;
 mod devices;
 mod engine;
 mod hardware;

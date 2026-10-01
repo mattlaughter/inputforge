@@ -33,7 +33,7 @@ impl Output {
             .with_keys(&keys)?
             .build()?;
 
-        let buttons: AttributeSet<KeyCode> = (0x110u16..=0x117).map(KeyCode::new).collect();
+        let buttons: AttributeSet<KeyCode> = (0x110u16..=0x11f).map(KeyCode::new).collect();
         let axes: AttributeSet<RelativeAxisCode> = [
             RelativeAxisCode::REL_X,
             RelativeAxisCode::REL_Y,
