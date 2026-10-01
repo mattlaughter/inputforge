@@ -1,7 +1,10 @@
 //! egui front-end.
 
 mod home;
+mod sensitivity;
 use home::View;
+// Re-export for sibling UI panels (e.g. sensitivity).
+pub(crate) use home::toggle;
 
 use eframe::egui::{self, RichText};
 use std::sync::{Arc, Mutex};

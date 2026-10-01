@@ -549,21 +549,23 @@ fn handle_batch(
             }
             EventSummary::RelativeAxis(_, axis, value) => {
                 let s = &src.settings;
+                let pointer = s.pointer_speed.clamp(0.1, 5.0);
+                let scroll = s.scroll_speed.clamp(0.25, 5.0);
                 let inv = if s.invert_scroll { -1 } else { 1 };
                 let v = match axis {
-                    RelativeAxisCode::REL_X => scale(&mut src.acc_x, value, s.pointer_speed),
-                    RelativeAxisCode::REL_Y => scale(&mut src.acc_y, value, s.pointer_speed),
+                    RelativeAxisCode::REL_X => scale(&mut src.acc_x, value, pointer),
+                    RelativeAxisCode::REL_Y => scale(&mut src.acc_y, value, pointer),
                     RelativeAxisCode::REL_WHEEL => {
-                        inv * scale(&mut src.acc_wheel, value, s.scroll_speed)
+                        inv * scale(&mut src.acc_wheel, value, scroll)
                     }
                     RelativeAxisCode::REL_WHEEL_HI_RES => {
-                        inv * scale(&mut src.acc_wheel_hr, value, s.scroll_speed)
+                        inv * scale(&mut src.acc_wheel_hr, value, scroll)
                     }
                     RelativeAxisCode::REL_HWHEEL => {
-                        scale(&mut src.acc_hwheel, value, s.scroll_speed)
+                        scale(&mut src.acc_hwheel, value, scroll)
                     }
                     RelativeAxisCode::REL_HWHEEL_HI_RES => {
-                        scale(&mut src.acc_hwheel_hr, value, s.scroll_speed)
+                        scale(&mut src.acc_hwheel_hr, value, scroll)
                     }
                     _ => value,
                 };

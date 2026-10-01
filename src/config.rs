@@ -239,7 +239,16 @@ impl Config {
             });
         }
         cfg.active_profile = cfg.active_profile.min(cfg.profiles.len() - 1);
+        cfg.clamp_device_speeds();
         Ok(cfg)
+    }
+
+    /// Keep pointer/scroll multipliers inside the UI ranges (hand-edited TOML).
+    fn clamp_device_speeds(&mut self) {
+        for d in &mut self.devices {
+            d.pointer_speed = d.pointer_speed.clamp(0.1, 5.0);
+            d.scroll_speed = d.scroll_speed.clamp(0.25, 5.0);
+        }
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
@@ -287,5 +296,18 @@ mod tests {
         let s = toml::to_string_pretty(&c).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(c, back);
+    }
+
+    #[test]
+    fn device_speeds_clamp_to_ui_range() {
+        let mut c = Config::default();
+        c.devices.push(DeviceSettings {
+            pointer_speed: 99.0,
+            scroll_speed: 0.01,
+            ..Default::default()
+        });
+        c.clamp_device_speeds();
+        assert_eq!(c.devices[0].pointer_speed, 5.0);
+        assert_eq!(c.devices[0].scroll_speed, 0.25);
     }
 }
