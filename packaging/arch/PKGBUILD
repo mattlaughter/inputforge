@@ -13,7 +13,7 @@ optdepends=('libratbag: DPI/polling settings for other mice'
 install=inputforge.install
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('cd0d69513e279f4484a1a590839a0984e314613810e86f14cd6299ff347cbd90')
 
 prepare() {
   cd "$pkgname-$pkgver"
@@ -25,6 +25,8 @@ build() {
   cd "$pkgname-$pkgver"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
+  # Keep build paths out of the binary (panic messages).
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
   cargo build --frozen --release
   packaging/render-icons.sh
 }

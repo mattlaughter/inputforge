@@ -60,8 +60,9 @@ If the distro's Rust is older than 1.95, install rustup (`sudo dnf install rustu
 and build with `packaging/rpm/build-rpm.sh --rustup`. The RPM build is fully offline because all
 crates are vendored. `build-rpm.sh --srpm` makes a source RPM you can upload to Fedora COPR.
 
-Ready-built packages for both are attached to each
-[release](https://github.com/mattlaughter/inputforge/releases).
+A ready-built Arch package is attached to each
+[release](https://github.com/mattlaughter/inputforge/releases)
+(`sudo pacman -U inputforge-*.pkg.tar.zst`).
 
 ### Any distro (from source)
 
