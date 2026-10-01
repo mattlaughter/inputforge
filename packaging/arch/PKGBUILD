@@ -13,7 +13,7 @@ optdepends=('libratbag: DPI/polling settings for other mice'
 install=inputforge.install
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('ec001d322d481662b41c65e852e638b18d5205b272aaffaadabd65927d6c7238')
 
 prepare() {
   cd "$pkgname-$pkgver"
