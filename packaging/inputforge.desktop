@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=InputForge
+GenericName=Keyboard & Mouse Control
+Comment=Remap keys, macros, autoclicker, DPI and RGB for keyboards and mice
+Exec=inputforge
+Icon=inputforge
+Terminal=false
+Categories=Settings;HardwareSettings;Utility;
+Keywords=keyboard;mouse;remap;macro;autoclicker;dpi;rgb;
+StartupWMClass=inputforge

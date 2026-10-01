@@ -1,0 +1,15 @@
+post_install() {
+  modprobe uinput >/dev/null 2>&1 || true
+  udevadm control --reload-rules >/dev/null 2>&1 || true
+  udevadm trigger --subsystem-match=input --subsystem-match=misc --subsystem-match=hidraw >/dev/null 2>&1 || true
+  cat <<'EOF'
+==> InputForge needs your account in the 'input' group:
+      sudo usermod -aG input $USER
+    then log out and back in.
+EOF
+}
+
+post_upgrade() {
+  udevadm control --reload-rules >/dev/null 2>&1 || true
+  udevadm trigger --subsystem-match=hidraw >/dev/null 2>&1 || true
+}

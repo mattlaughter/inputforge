@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Tray icon (active): keycap outline + bolt, bold strokes so it reads at 22px -->
+  <rect x="7" y="8" width="50" height="48" rx="11" fill="none" stroke="#2bb8ff" stroke-width="5"/>
+  <path d="M36 13 L20 34 H31 L27 51 L45 27 H34 Z" fill="#2bb8ff"/>
+</svg>

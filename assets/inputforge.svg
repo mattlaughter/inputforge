@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16c2ff"/>
+      <stop offset="1" stop-color="#6a3bff"/>
+    </linearGradient>
+    <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dfe6ff"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22d0ff"/>
+      <stop offset="1" stop-color="#7044ff"/>
+    </linearGradient>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="6" stdDeviation="7" flood-color="#1a0b55" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <!-- tile -->
+  <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#bg)"/>
+  <rect x="12" y="12" width="232" height="116" rx="54" fill="#ffffff" opacity="0.08"/>
+  <!-- keycap: base + top face -->
+  <g filter="url(#sh)">
+    <rect x="52" y="58" width="152" height="148" rx="30" fill="#c9d3ff"/>
+    <rect x="62" y="62" width="132" height="122" rx="24" fill="url(#cap)"/>
+  </g>
+  <!-- forge bolt -->
+  <path d="M138 78 L94 136 H124 L114 170 L162 108 H131 Z" fill="url(#bolt)" stroke="#5a2fe0" stroke-width="3" stroke-linejoin="round"/>
+</svg>
