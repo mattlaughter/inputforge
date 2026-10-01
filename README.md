@@ -8,6 +8,17 @@ X11, and in games.
 
 ![Home screen](docs/home.png)
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Per-key keyboard lighting](docs/keyboard-lighting.png) | ![Mouse assignments](docs/mouse-assignments.png) |
+| **Per-key lighting:** click or drag to paint keys on the G815 | **Assignments:** every button with its current function; click to change |
+| ![Mouse lighting](docs/mouse-lighting.png) | ![Macro editor](docs/macros.png) |
+| **Mouse lighting:** solid, breathing, rainbow, or match the keyboard | **Macros:** taps, held keys, typed text, delays and mouse moves |
+| ![Settings](docs/settings.png) | |
+| **Settings:** start at login in the tray, restore lighting, theme | |
+
 ## Features
 
 - **Devices at a glance.** The home screen shows one card per keyboard and mouse. Click a card

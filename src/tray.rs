@@ -292,6 +292,10 @@ pub enum Instance {
 /// Claim the single-instance bus name. If another instance owns it, forward
 /// `forward` (Show, or Quit) to it and return Secondary.
 pub fn claim(tx: Sender<Cmd>, waker: Waker, forward: Option<&str>) -> Instance {
+    // Dev/screenshot aid: run a separate, tray-less instance.
+    if std::env::var_os("INPUTFORGE_NO_SINGLE_INSTANCE").is_some() {
+        return Instance::Primary(None);
+    }
     let Ok(conn) = zbus::blocking::Connection::session() else {
         return Instance::Primary(None);
     };

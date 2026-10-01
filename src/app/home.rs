@@ -1356,6 +1356,7 @@ pub fn view_from_str(v: &str) -> Option<View> {
     match parts.as_slice() {
         ["settings"] => Some(View::Settings(SettingsPage::General)),
         ["settings", "macros"] => Some(View::Settings(SettingsPage::Macros)),
+        ["settings", "autoclicker"] => Some(View::Settings(SettingsPage::Autoclicker)),
         ["settings", "advanced"] => Some(View::Settings(SettingsPage::Advanced)),
         ["device", vid, pid, sec] => Some(View::Device(
             format!("{vid}:{pid}"),
