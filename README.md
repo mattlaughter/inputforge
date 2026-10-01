@@ -30,7 +30,7 @@ X11, and in games.
 - **Built-in RGB lighting** for the Logitech G815/G813 (per-key painting, solid, breathing,
   rainbow) and G600 (solid, breathing, rainbow). No OpenRGB or other tools are needed. The
   colours are restored at login.
-- **Macros:** taps, key down/up, typed text, delays, mouse moves and scrolls. Each macro runs
+- **Macros:** taps, key down/up, typed text (US QWERTY layout only), delays, mouse moves and scrolls. Each macro runs
   once per press, repeats while held, or loops until toggled off.
 - **Autoclicker:** any button or key, 0.5–100 clicks/s, an optional click limit and a hotkey.
 - **Sensitivity:** pointer and scroll speed per mouse, plus natural scrolling.
@@ -76,6 +76,8 @@ A ready-built Arch package is attached to each
 (`sudo pacman -U inputforge-*.pkg.tar.zst`).
 
 ### Any distro (from source)
+
+Requires Rust 1.95 or newer.
 
 ```bash
 cargo build --release

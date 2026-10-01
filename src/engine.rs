@@ -194,6 +194,7 @@ fn run(ctx: Ctx) {
             Ok(Msg::Gone { dev, err }) => {
                 if let Some(s) = sources.get_mut(dev) {
                     s.alive = false;
+                    s.physically_held.clear();
                     ctx.log(format!("Device disconnected: {} ({err})", s.settings.name));
                 }
             }
@@ -384,6 +385,18 @@ fn scale(acc: &mut f32, value: i32, factor: f32) -> i32 {
     whole as i32
 }
 
+/// True when `key` (just pressed) completes Left Ctrl + Right Ctrl + Esc, with the keys held on
+/// any combination of sources.
+fn emergency_chord(sources: &[Source], key: KeyCode) -> bool {
+    key == KeyCode::KEY_ESC
+        && sources
+            .iter()
+            .any(|s| s.physically_held.contains(&KeyCode::KEY_LEFTCTRL))
+        && sources
+            .iter()
+            .any(|s| s.physically_held.contains(&KeyCode::KEY_RIGHTCTRL))
+}
+
 /// Returns Some(true) when the emergency-stop chord was pressed.
 fn handle_batch(
     ctx: &Ctx,
@@ -392,6 +405,27 @@ fn handle_batch(
     events: Vec<InputEvent>,
     macros: &mut HashMap<(usize, KeyCode), MacroRun>,
 ) -> Option<bool> {
+    // Track physically held keys first, across every grabbed source, so the chord works even
+    // when the modifiers and Esc arrive on different event nodes of the same device.
+    let mut chord = false;
+    sources.get(dev)?;
+    for ev in &events {
+        if let EventSummary::Key(_, key, value) = ev.destructure() {
+            match value {
+                1 => {
+                    sources[dev].physically_held.insert(key);
+                }
+                0 => {
+                    sources[dev].physically_held.remove(&key);
+                }
+                _ => {}
+            }
+            chord |= value == 1 && emergency_chord(sources, key);
+        }
+    }
+    if chord {
+        return Some(true);
+    }
     let src = sources.get_mut(dev)?;
     let cfg = ctx.config.read().unwrap().clone();
     let mut out_events: Vec<InputEvent> = Vec::with_capacity(events.len());
@@ -400,23 +434,6 @@ fn handle_batch(
     for ev in events {
         match ev.destructure() {
             EventSummary::Key(_, key, value) => {
-                match value {
-                    1 => {
-                        src.physically_held.insert(key);
-                    }
-                    0 => {
-                        src.physically_held.remove(&key);
-                    }
-                    _ => {}
-                }
-                // Emergency stop chord.
-                if value == 1
-                    && key == KeyCode::KEY_ESC
-                    && src.physically_held.contains(&KeyCode::KEY_LEFTCTRL)
-                    && src.physically_held.contains(&KeyCode::KEY_RIGHTCTRL)
-                {
-                    return Some(true);
-                }
                 // Key capture for the GUI's "press a key" buttons.
                 if value == 1 {
                     let mut sh = ctx.shared.lock().unwrap();
@@ -692,7 +709,7 @@ fn set_autoclick(
             if ac.max_clicks > 0 && n >= ac.max_clicks {
                 break;
             }
-            let cps = ac.clicks_per_second.clamp(0.1, 1000.0);
+            let cps = ac.clicks_per_second.clamp(0.5, 100.0);
             next += Duration::from_secs_f32(1.0 / cps);
             let now = Instant::now();
             if next > now {
@@ -759,4 +776,55 @@ pub fn test_macro(m: Macro) -> anyhow::Result<()> {
     run_steps(&m.steps, &out, &no, &no);
     std::thread::sleep(Duration::from_millis(100));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(held: &[KeyCode]) -> Source {
+        Source {
+            settings: DeviceSettings::default(),
+            path: PathBuf::new(),
+            alive: true,
+            acc_x: 0.0,
+            acc_y: 0.0,
+            acc_wheel: 0.0,
+            acc_wheel_hr: 0.0,
+            acc_hwheel: 0.0,
+            acc_hwheel_hr: 0.0,
+            physically_held: held.iter().copied().collect(),
+        }
+    }
+
+    #[test]
+    fn chord_on_one_source() {
+        let s = [source(&[KeyCode::KEY_LEFTCTRL, KeyCode::KEY_RIGHTCTRL])];
+        assert!(emergency_chord(&s, KeyCode::KEY_ESC));
+    }
+
+    #[test]
+    fn chord_split_across_sources() {
+        let s = [
+            source(&[KeyCode::KEY_LEFTCTRL]),
+            source(&[KeyCode::KEY_RIGHTCTRL]),
+            source(&[]),
+        ];
+        assert!(emergency_chord(&s, KeyCode::KEY_ESC));
+    }
+
+    #[test]
+    fn chord_needs_both_ctrls_and_esc() {
+        let s = [source(&[KeyCode::KEY_LEFTCTRL]), source(&[])];
+        assert!(!emergency_chord(&s, KeyCode::KEY_ESC));
+        let s = [source(&[KeyCode::KEY_LEFTCTRL, KeyCode::KEY_RIGHTCTRL])];
+        assert!(!emergency_chord(&s, KeyCode::KEY_A));
+    }
+
+    #[test]
+    fn scale_carries_fraction() {
+        let mut acc = 0.0;
+        assert_eq!(scale(&mut acc, 1, 0.5), 0);
+        assert_eq!(scale(&mut acc, 1, 0.5), 1);
+    }
 }

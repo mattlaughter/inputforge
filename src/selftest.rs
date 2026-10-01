@@ -11,6 +11,7 @@ use crate::config::{Action, Config, DeviceSettings, Macro, MacroMode, Profile, R
 use crate::engine::{Engine, Shared};
 
 const SRC_NAME: &str = "IF-Selftest Source";
+const SRC2_NAME: &str = "IF-Selftest Source B";
 
 fn find(name: &str) -> anyhow::Result<Device> {
     find_new(name, &Default::default())
@@ -107,15 +108,39 @@ pub fn run() -> anyhow::Result<bool> {
     let phys = src_dev.physical_path().unwrap_or("").to_string();
     drop(src_dev);
 
+    // A second fake node, like the extra event nodes real Logitech devices expose.
+    let keys2: AttributeSet<KeyCode> = [
+        KeyCode::KEY_LEFTCTRL,
+        KeyCode::KEY_RIGHTCTRL,
+        KeyCode::KEY_ESC,
+    ]
+    .into_iter()
+    .collect();
+    let mut src2 = VirtualDevice::builder()?
+        .name(SRC2_NAME)
+        .with_keys(&keys2)?
+        .build()?;
+    let src2_dev = find(SRC2_NAME)?;
+    let phys2 = src2_dev.physical_path().unwrap_or("").to_string();
+    drop(src2_dev);
+
     // 2. Config: only the fake device enabled.
     let cfg = Config {
-        devices: vec![DeviceSettings {
-            name: SRC_NAME.into(),
-            phys,
-            enabled: true,
-            pointer_speed: 2.0,
-            ..Default::default()
-        }],
+        devices: vec![
+            DeviceSettings {
+                name: SRC_NAME.into(),
+                phys,
+                enabled: true,
+                pointer_speed: 2.0,
+                ..Default::default()
+            },
+            DeviceSettings {
+                name: SRC2_NAME.into(),
+                phys: phys2,
+                enabled: true,
+                ..Default::default()
+            },
+        ],
         profiles: vec![Profile {
             name: "test".into(),
             rules: vec![
@@ -168,12 +193,12 @@ pub fn run() -> anyhow::Result<bool> {
     let mut vp = find_new("InputForge Virtual Pointer", &existing)?;
     // Wait for the grab.
     let t0 = Instant::now();
-    while shared.lock().unwrap().grabbed.is_empty() && t0.elapsed() < Duration::from_secs(4) {
+    while shared.lock().unwrap().grabbed.len() < 2 && t0.elapsed() < Duration::from_secs(4) {
         std::thread::sleep(Duration::from_millis(20));
     }
-    let grabbed = !shared.lock().unwrap().grabbed.is_empty();
+    let grabbed = shared.lock().unwrap().grabbed.len() == 2;
     let mut all = check(
-        "engine grabbed fake device",
+        "engine grabbed both fake devices",
         grabbed,
         shared.lock().unwrap().log.clone(),
     );
@@ -255,6 +280,20 @@ pub fn run() -> anyhow::Result<bool> {
         "extra mouse button 0x118 passes through",
         got == [(0x118, 1), (0x118, 0)],
         &got,
+    );
+
+    // Emergency chord split across two nodes: Left Ctrl on A, Right Ctrl + Esc on B.
+    key(&mut src, KeyCode::KEY_LEFTCTRL, 1);
+    key(&mut src2, KeyCode::KEY_RIGHTCTRL, 1);
+    key(&mut src2, KeyCode::KEY_ESC, 1);
+    let t0 = Instant::now();
+    while !engine.is_finished() && t0.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    all &= check(
+        "emergency chord across two nodes stops the engine",
+        engine.is_finished(),
+        "engine still running",
     );
 
     engine.stop();
