@@ -443,6 +443,11 @@ impl App {
         self.waker.set(None);
         self.capture = None;
         self.sync_config();
+        // The window's textures, fonts and layout caches were freed; hand the
+        // memory back to the OS instead of keeping it in malloc's free lists.
+        unsafe {
+            libc::malloc_trim(0);
+        }
     }
 
     pub fn has_tray(&self) -> bool {
