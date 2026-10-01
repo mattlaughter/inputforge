@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-10-01
+
+- **Fix: cursor stutter.** The engine rescanned every input device every 2 s on the thread that
+  forwards events, freezing the pointer for ~130 ms each time. It now only rescans when
+  `/dev/input` changes.
+- Mouse: KDE Plasma pointer settings (acceleration profile/speed, natural scroll, left-handed,
+  scroll factor) of the grabbed mouse are copied to the virtual pointer, so System Settings
+  keeps applying.
+- Mouse: forward all 16 mouse buttons (0x110–0x11F); the G600's extra buttons were dropped.
+- Return the window's memory to the OS when it is closed to the tray.
 
 - Pin the Rust toolchain to 1.95 (`rust-toolchain.toml` + CI) so builds match the MSRV.
 - Clamp pointer/scroll speed multipliers in the engine and on config load to the UI ranges

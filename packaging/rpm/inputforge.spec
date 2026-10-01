@@ -7,7 +7,7 @@
 %bcond_with rustup
 
 Name:           inputforge
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Keyboard and mouse remapping, macros, autoclicker and RGB lighting
 
@@ -102,5 +102,8 @@ fi
 %{_datadir}/icons/hicolor/*/apps/inputforge.*
 
 %changelog
-* Wed Sep 30 2026 oliverpissed - 0.1.0-1
+* Thu Oct 01 2026 Matt Laughter - 0.1.1-1
+- Fix cursor stutter every 2 s; mirror KDE pointer settings; forward all mouse buttons
+
+* Wed Sep 30 2026 Matt Laughter - 0.1.0-1
 - First RPM package
