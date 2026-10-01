@@ -177,6 +177,7 @@ fn run(ctx: Ctx) {
 
     let mut macros: HashMap<(usize, KeyCode), MacroRun> = HashMap::new();
     let mut last_rescan = Instant::now();
+    let mut nodes = devices::node_signature();
 
     loop {
         if ctx.stop.load(Ordering::SeqCst) {
@@ -203,10 +204,18 @@ fn run(ctx: Ctx) {
         }
         // Reap finished macros.
         macros.retain(|_, m| !m.handle.is_finished());
-        // Hot-plug: periodically look for enabled devices that (re)appeared.
-        if last_rescan.elapsed() > Duration::from_secs(2) {
+        // Hot-plug: a full scan opens every input device (~100+ ms) and this
+        // thread forwards pointer motion, so only rescan when the set of
+        // /dev/input nodes actually changed (a cheap directory listing).
+        if last_rescan.elapsed() > Duration::from_millis(500) {
             last_rescan = Instant::now();
-            attach_devices(&ctx, &tx, &mut sources, &mut readers);
+            let now = devices::node_signature();
+            if now != nodes {
+                nodes = now;
+                // Give udev a moment to set permissions on new nodes.
+                std::thread::sleep(Duration::from_millis(50));
+                attach_devices(&ctx, &tx, &mut sources, &mut readers);
+            }
         }
     }
 

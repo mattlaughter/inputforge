@@ -81,6 +81,25 @@ pub struct ScanResult {
     pub unreadable: usize,
 }
 
+/// Cheap fingerprint of the current /dev/input/event* nodes (names + inode
+/// change times), used to detect hot-plug without opening any device.
+pub fn node_signature() -> Vec<(String, i64)> {
+    use std::os::unix::fs::MetadataExt;
+    let mut v: Vec<(String, i64)> = std::fs::read_dir("/dev/input")
+        .map(|d| {
+            d.flatten()
+                .filter_map(|e| {
+                    let n = e.file_name().into_string().ok()?;
+                    n.starts_with("event")
+                        .then(|| (n, e.metadata().map(|m| m.ctime()).unwrap_or(0)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
 pub fn scan() -> ScanResult {
     let mut devices = vec![];
     let mut unreadable = 0;
