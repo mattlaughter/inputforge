@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-10-02
+
+- Fix: in 0.2.0 the lighting rule never matched (udev needs every `ATTRS{}` key on the same
+  parent, but vendor id and interface number are on different ones), so lighting failed with
+  "No permission to change lighting (/dev/hidraw5)" once the `input` group was removed. The rule
+  now matches on `ENV{ID_VENDOR_ID/ID_MODEL_ID/ID_USB_INTERFACE_NUM}`.
+
 ## 0.2.0 — 2026-10-01
 
 **Permissions change: no more `input` group.** Membership in `input` gives every program the
