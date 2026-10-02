@@ -343,6 +343,9 @@ impl App {
     }
 
     pub(crate) fn set_phys_enabled(&mut self, d: &PhysDevice, on: bool) {
+        if on && !self.ensure_access(d) {
+            return;
+        }
         for n in d.grabbable_nodes() {
             match self
                 .cfg
@@ -357,6 +360,36 @@ impl App {
                     enabled: on,
                     ..Default::default()
                 }),
+            }
+        }
+    }
+
+    /// Make sure this user may read the device's event nodes; if not, ask for
+    /// the admin password (pkexec) to add a per-device uaccess rule.
+    /// Returns false if access is still missing.
+    pub(crate) fn ensure_access(&mut self, d: &PhysDevice) -> bool {
+        if d.grabbable_nodes().all(|n| n.accessible) {
+            return true;
+        }
+        match devices::request_access(&[(d.vendor, d.product)]) {
+            Ok(()) => {
+                self.rescan();
+                let ok = self
+                    .phys
+                    .iter()
+                    .find(|p| p.id == d.id)
+                    .is_some_and(|p| p.grabbable_nodes().all(|n| n.accessible));
+                if !ok {
+                    self.error = Some(format!(
+                        "Access to {} was granted but isn't active yet. Unplug and replug it, then try again.",
+                        d.name
+                    ));
+                }
+                ok
+            }
+            Err(e) => {
+                self.error = Some(format!("Can't use {}: {e}", d.name));
+                false
             }
         }
     }
@@ -464,7 +497,7 @@ impl App {
     // ── home ──
     pub(super) fn ui_home(&mut self, ui: &mut egui::Ui) {
         let c = self.colors;
-        let hint = devices::group_hint();
+        let hint = devices::access_hint();
         if !hint.is_empty() || !self.uinput_ok {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.label(RichText::new("⚠ Setup needed").strong().color(c.warning));

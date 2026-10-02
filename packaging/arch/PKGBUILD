@@ -1,19 +1,19 @@
 # Maintainer: Matt Laughter <https://github.com/mattlaughter>
 pkgname=inputforge
-pkgver=0.1.1
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Keyboard and mouse remapping, macros, autoclicker and RGB lighting (evdev/uinput, Wayland + X11)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/mattlaughter/inputforge"
 license=('MIT')
-depends=('gcc-libs' 'glibc' 'libxkbcommon' 'wayland' 'libglvnd' 'libx11' 'libxcursor' 'libxi' 'libxrandr' 'systemd-libs')
+depends=('polkit' 'gcc-libs' 'glibc' 'libxkbcommon' 'wayland' 'libglvnd' 'libx11' 'libxcursor' 'libxi' 'libxrandr' 'systemd-libs')
 makedepends=('cargo' 'librsvg')
 optdepends=('libratbag: DPI/polling settings for other mice'
             'openrgb: lighting for devices without a built-in driver')
 install=inputforge.install
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('ec001d322d481662b41c65e852e638b18d5205b272aaffaadabd65927d6c7238')
+sha256sums=('SKIP')
 
 prepare() {
   cd "$pkgname-$pkgver"
@@ -40,8 +40,7 @@ check() {
 package() {
   cd "$pkgname-$pkgver"
   install -Dm755 target/release/inputforge "$pkgdir/usr/bin/inputforge"
-  install -Dm644 packaging/99-inputforge.rules "$pkgdir/usr/lib/udev/rules.d/99-inputforge.rules"
-  install -Dm644 packaging/70-inputforge-lighting.rules "$pkgdir/usr/lib/udev/rules.d/70-inputforge-lighting.rules"
+  install -Dm644 packaging/70-inputforge.rules "$pkgdir/usr/lib/udev/rules.d/70-inputforge.rules"
   install -dm755 "$pkgdir/usr/lib/modules-load.d"
   echo uinput > "$pkgdir/usr/lib/modules-load.d/inputforge.conf"
   install -Dm644 packaging/inputforge.desktop "$pkgdir/usr/share/applications/inputforge.desktop"

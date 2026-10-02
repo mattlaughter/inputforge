@@ -34,7 +34,7 @@ fn find_new(
     }
     anyhow::bail!(
         "device '{name}' not found or not readable. {}",
-        crate::devices::group_hint()
+        crate::devices::access_hint()
     )
 }
 

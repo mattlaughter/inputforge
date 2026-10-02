@@ -17,22 +17,66 @@ fn main() -> eframe::Result {
         let r = devices::scan();
         for d in r.devices {
             println!(
-                "{:<22} {:<18} {} [{}]",
+                "{:<22} {:<18} {:04x}:{:04x} {:<9} {} [{}]",
                 d.path.display(),
                 d.kind.label(),
+                d.vendor,
+                d.product,
+                if d.accessible { "access" } else { "no-access" },
                 d.name,
                 d.phys
             );
         }
         if r.unreadable > 0 {
-            eprintln!("({} devices unreadable — permissions)", r.unreadable);
-            let hint = devices::group_hint();
-            if !hint.is_empty() {
-                eprintln!("{hint}");
-            }
+            eprintln!(
+                "({} devices not accessible; turn a device on in InputForge to grant access to it)",
+                r.unreadable
+            );
+        }
+        let hint = devices::access_hint();
+        if !hint.is_empty() {
+            eprintln!("{hint}");
         }
         println!("uinput writable: {}", devices::uinput_writable());
         return Ok(());
+    }
+
+    // Root helper (run through pkexec by the app): per-device uaccess rules.
+    for (flag, allow) in [("--udev-allow", true), ("--udev-revoke", false)] {
+        if let Some(i) = args.iter().position(|a| a == flag) {
+            let ids: Option<Vec<(u16, u16)>> =
+                args[i + 1..].iter().map(|a| devices::parse_id(a)).collect();
+            let Some(ids) = ids.filter(|v| !v.is_empty()) else {
+                eprintln!("usage: inputforge {flag} vvvv:pppp [vvvv:pppp ...]");
+                std::process::exit(2);
+            };
+            let r = if allow {
+                devices::udev_update(&ids, &[])
+            } else {
+                devices::udev_update(&[], &ids)
+            };
+            match r {
+                Ok(now) => {
+                    let list: Vec<String> = now
+                        .iter()
+                        .map(|(v, p)| format!("{v:04x}:{p:04x}"))
+                        .collect();
+                    println!(
+                        "InputForge device access: {}",
+                        if list.is_empty() {
+                            "none".into()
+                        } else {
+                            list.join(" ")
+                        }
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("inputforge {flag}: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
     if args.iter().any(|a| a == "--apply-lighting") {
@@ -43,6 +87,18 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
+    if args.iter().any(|a| a == "--selftest") && unsafe { libc::geteuid() } != 0 {
+        // The test reads InputForge's own virtual devices, which (by design)
+        // ordinary programs can't. Re-run as root through a password prompt.
+        eprintln!(
+            "The self-test reads InputForge's virtual devices and needs admin rights; asking…"
+        );
+        let st = std::process::Command::new("pkexec")
+            .arg(std::env::current_exe().expect("exe path"))
+            .arg("--selftest")
+            .status();
+        std::process::exit(st.ok().and_then(|s| s.code()).unwrap_or(1));
+    }
     if args.iter().any(|a| a == "--selftest") {
         match selftest::run() {
             Ok(true) => println!("All checks passed."),

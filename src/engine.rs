@@ -272,6 +272,13 @@ fn attach_devices(
         if sources.iter().any(|s| s.alive && s.path == info.path) {
             continue;
         }
+        if !info.accessible {
+            ctx.log(format!(
+                "No access to {}: turn it off and on again in InputForge to grant access",
+                info.name
+            ));
+            continue;
+        }
         let mut dev = match Device::open(&info.path) {
             Ok(d) => d,
             Err(e) => {

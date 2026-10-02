@@ -572,14 +572,12 @@ impl App {
                 }
                 if self.unreadable > 0 {
                     ui.label(format!(
-                        "• {} input devices can't be opened. Add yourself to the 'input' group or install the bundled udev rule:",
+                        "• {} input devices are not accessible. That's normal: InputForge only gets access to a device when you turn it on (you'll be asked for your password once per device).",
                         self.unreadable
                     ));
                 }
-                let hint = devices::group_hint();
-                if hint.is_empty() {
-                    ui.code("sudo ./install.sh   # installs udev rule + adds you to 'input', then log out/in");
-                } else {
+                let hint = devices::access_hint();
+                if !hint.is_empty() {
                     ui.label(RichText::new(format!("• {hint}")).strong());
                 }
             });
@@ -601,7 +599,15 @@ impl App {
                     let mut enabled = idx.map(|i| self.cfg.devices[i].enabled).unwrap_or(false);
                     let resp =
                         ui.add_enabled(d.kind.grabbable(), egui::Checkbox::new(&mut enabled, ""));
-                    if resp.changed() {
+                    if resp.changed()
+                        && enabled
+                        && !d.accessible
+                        && let Err(e) = devices::request_access(&[(d.vendor, d.product)])
+                    {
+                        self.error = Some(format!("Can't use {}: {e}", d.name));
+                        enabled = false;
+                    }
+                    if resp.changed() && (enabled || idx.is_some()) {
                         match idx {
                             Some(i) => self.cfg.devices[i].enabled = enabled,
                             None => self.cfg.devices.push(DeviceSettings {

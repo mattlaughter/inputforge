@@ -1,2 +1,0 @@
-# InputForge built-in lighting: give the logged-in user access (must run before 73-seat-late).
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c33f|c232|c24a", TAG+="uaccess", GROUP="input", MODE="0660"

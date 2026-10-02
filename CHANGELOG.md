@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.0 — 2026-10-01
+
+**Permissions change: no more `input` group.** Membership in `input` gives every program the
+user runs read access to every keyboard. Access is now per device and per session (udev
+`uaccess` ACLs):
+
+- `/dev/uinput` via `uaccess` (same as Steam's `60-steam-input.rules`).
+- Keyboards/mice: none by default. Turning a device on in InputForge asks for the password once
+  (`pkexec inputforge --udev-allow vvvv:pppp`) and adds a rule for that device only.
+  `--udev-revoke` removes it.
+- Lighting hidraw access is narrowed to the vendor HID++/config interface (interface 1) of the
+  G815/G813/G600. 0.1 also exposed their typing/pointer interfaces over hidraw.
+- Devices are listed from sysfs, so they appear in the app before access is granted.
+- `--selftest` re-runs itself through pkexec, since it reads InputForge's own virtual devices.
+- Installers and packages no longer add the user to `input`. Upgrades remove the 0.1 rules and
+  print how to leave the group.
+
 ## 0.1.1 — 2026-10-01
 
 - **Fix: cursor stutter.** The engine rescanned every input device every 2 s on the thread that

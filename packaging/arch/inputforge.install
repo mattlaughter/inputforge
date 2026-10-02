@@ -1,15 +1,31 @@
-post_install() {
+_reload() {
   modprobe uinput >/dev/null 2>&1 || true
   udevadm control --reload-rules >/dev/null 2>&1 || true
-  udevadm trigger --subsystem-match=input --subsystem-match=misc --subsystem-match=hidraw >/dev/null 2>&1 || true
+  udevadm trigger --subsystem-match=misc --subsystem-match=hidraw --subsystem-match=input --action=change >/dev/null 2>&1 || true
+}
+
+post_install() {
+  _reload
   cat <<'EOF'
-==> InputForge needs your account in the 'input' group:
-      sudo usermod -aG input $USER
-    then log out and back in.
+==> InputForge uses per-device access: turning a keyboard or mouse on in the app
+    asks for your password once and grants your desktop session access to that
+    device only. No 'input' group membership is needed.
 EOF
 }
 
 post_upgrade() {
+  _reload
+  if [ "$(vercmp "$2" 0.2.0)" -lt 0 ]; then
+    cat <<'EOF'
+==> InputForge 0.2 no longer uses the 'input' group. If an older version added
+    you to it, you can remove yourself (then log out and back in):
+      sudo gpasswd -d $USER input
+    Re-enable your devices in InputForge; each asks for your password once.
+EOF
+  fi
+}
+
+post_remove() {
   udevadm control --reload-rules >/dev/null 2>&1 || true
-  udevadm trigger --subsystem-match=hidraw >/dev/null 2>&1 || true
+  echo "==> Per-device rules remain in /etc/udev/rules.d/70-inputforge-devices.rules; delete it if unwanted."
 }

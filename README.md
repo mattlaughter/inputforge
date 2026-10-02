@@ -53,7 +53,6 @@ other mice) and OpenRGB (other RGB devices).
 git clone https://github.com/mattlaughter/inputforge
 cd inputforge/packaging/arch
 makepkg -si
-sudo usermod -aG input $USER     # then log out and back in
 ```
 
 ### Nobara / Fedora
@@ -64,7 +63,6 @@ git clone https://github.com/mattlaughter/inputforge
 cd inputforge
 packaging/rpm/build-rpm.sh
 sudo dnf install ~/rpmbuild/RPMS/x86_64/inputforge-*.rpm
-sudo usermod -aG input $USER     # then log out and back in
 ```
 
 If the distro's Rust is older than 1.95, install rustup (`sudo dnf install rustup && rustup-init`)
@@ -84,21 +82,37 @@ cargo build --release
 sudo ./install.sh     # binary to /usr/local/bin, udev rules, icons, menu entry, adds you to 'input'
 ```
 
-## Why the `input` group?
+## Permissions (no `input` group)
 
-InputForge reads your keyboards and mice from `/dev/input/event*` and creates virtual devices
-through `/dev/uinput`. Both are restricted to the `input` group, and the packages add a udev
-rule that grants it uinput access. The lighting rule gives the logged-in user access to the
-supported Logitech devices' `hidraw` nodes.
+InputForge does **not** put you in the `input` group. That group lets every program you run read
+every keyboard, which is keylogger-level access. Instead, access is granted per device and per
+session through udev `uaccess` ACLs:
+
+- **Virtual output** (`/dev/uinput`): granted to the user at the active local desktop, the same
+  rule Steam uses for controller emulation.
+- **Your keyboards and mice:** nothing by default. When you turn a device on in InputForge, it
+  asks for your password once and adds a rule for **that device only** to
+  `/etc/udev/rules.d/70-inputforge-devices.rules`. Turning it off doesn't remove the rule; use
+  `pkexec inputforge --udev-revoke vvvv:pppp` (ids from `inputforge --list-devices`).
+- **Lighting:** only the vendor-specific HID++/config interface of the supported Logitech devices
+  is exposed over hidraw, never their typing interface.
+
+What this does and doesn't protect: programs in other sessions, SSH logins and background
+services get nothing. A program running in *your* desktop session can still read a device you
+granted whenever InputForge isn't holding it, and while InputForge is active it holds the device
+exclusively. The self-test reads InputForge's virtual devices, so it asks for your password.
+
+Upgrading from 0.1 removes the old group-based rules. If 0.1 added you to `input`, remove yourself
+with `sudo gpasswd -d $USER input`, log out and back in, then turn your devices on again.
 
 ## CLI
 
 ```bash
 inputforge                  # open the window (or show the running one)
 inputforge --background     # start in the tray only (used at login)
-inputforge --list-devices   # detected input devices and permission status
+inputforge --list-devices   # devices with vendor:product ids and access status
 inputforge --apply-lighting # apply the saved lighting and exit
-inputforge --selftest       # end-to-end engine test on a fake device
+inputforge --selftest       # end-to-end engine test on a fake device (asks for password)
 ```
 
 The config is saved automatically to `~/.config/inputforge/config.toml`.

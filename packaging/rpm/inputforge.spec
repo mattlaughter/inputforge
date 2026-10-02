@@ -7,7 +7,7 @@
 %bcond_with rustup
 
 Name:           inputforge
-Version:        0.1.1
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        Keyboard and mouse remapping, macros, autoclicker and RGB lighting
 
@@ -37,55 +37,12 @@ Requires:       libXcursor
 Requires:       libXi
 Requires:       libxkbcommon-x11
 # udevadm / modprobe in %%post
-Requires(post): systemd-udev
-Requires(post): kmod
-
-%description
-InputForge controls keyboards and mice at the kernel level (evdev + uinput), so it
-works on Wayland, X11 and the console: key and button remapping, shortcuts,
-macros, an autoclicker, pointer speed, and built-in RGB lighting for the Logitech
-G815/G813 keyboards and G600 mouse. Runs in the system tray.
-
-%prep
-%autosetup -n %{name}-%{version}
-tar -xzf %{SOURCE1}
-mkdir -p .cargo
-cat > .cargo/config.toml <<'EOF'
-[source.crates-io]
-replace-with = "vendored-sources"
-
-[source.vendored-sources]
-directory = "vendor"
-EOF
-
-%build
-export CARGO_HOME="$PWD/.cargo-home"
-cargo build --release --locked --offline
-packaging/render-icons.sh
-
-%install
-install -Dm755 target/release/inputforge %{buildroot}%{_bindir}/inputforge
-install -Dm644 packaging/99-inputforge.rules %{buildroot}%{_udevrulesdir}/99-inputforge.rules
-install -Dm644 packaging/70-inputforge-lighting.rules %{buildroot}%{_udevrulesdir}/70-inputforge-lighting.rules
-install -dm755 %{buildroot}%{_modulesloaddir}
-echo uinput > %{buildroot}%{_modulesloaddir}/inputforge.conf
-desktop-file-install --dir=%{buildroot}%{_datadir}/applications packaging/inputforge.desktop
-install -Dm644 assets/inputforge.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/inputforge.svg
-for s in 16 22 24 32 48 64 128 256 512; do
-  install -Dm644 target/icons/inputforge-$s.png \
-    %{buildroot}%{_datadir}/icons/hicolor/${s}x${s}/apps/inputforge.png
-done
-
-%check
-cargo test --release --locked --offline
-
-%post
 %udev_rules_update
 modprobe uinput >/dev/null 2>&1 || :
-udevadm trigger --subsystem-match=input --subsystem-match=misc --subsystem-match=hidraw >/dev/null 2>&1 || :
+udevadm trigger --subsystem-match=misc --subsystem-match=hidraw --subsystem-match=input --action=change >/dev/null 2>&1 || :
 if [ $1 -eq 1 ]; then
-  echo "InputForge: add yourself to the 'input' group, then log out and back in:"
-  echo "    sudo usermod -aG input \$USER"
+  echo "InputForge: turning a keyboard or mouse on asks for your password once to grant access"
+  echo "to that device. No 'input' group membership is needed."
 fi
 
 %postun
@@ -95,13 +52,15 @@ fi
 %license LICENSE
 %doc README.md
 %{_bindir}/inputforge
-%{_udevrulesdir}/99-inputforge.rules
-%{_udevrulesdir}/70-inputforge-lighting.rules
+%{_udevrulesdir}/70-inputforge.rules
 %{_modulesloaddir}/inputforge.conf
 %{_datadir}/applications/inputforge.desktop
 %{_datadir}/icons/hicolor/*/apps/inputforge.*
 
 %changelog
+* Thu Oct 01 2026 Matt Laughter - 0.2.0-1
+- Per-device uaccess udev rules instead of the input group
+
 * Thu Oct 01 2026 Matt Laughter - 0.1.1-1
 - Fix cursor stutter every 2 s; mirror KDE pointer settings; forward all mouse buttons
 

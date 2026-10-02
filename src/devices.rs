@@ -50,29 +50,94 @@ pub struct DeviceInfo {
     pub product: u16,
     /// Supported EV_KEY codes (keys and buttons).
     pub keys: Vec<u16>,
+    /// Whether this user can open the node. Devices are listed from sysfs
+    /// either way, so they can be shown and access requested per device.
+    pub accessible: bool,
 }
 
 pub fn classify(dev: &Device) -> DeviceKind {
-    let keys = dev.supported_keys();
-    let has_key = |k| keys.is_some_and(|s| s.contains(k));
-    let rel = dev.supported_relative_axes();
-    let has_rel = |a| rel.is_some_and(|s| s.contains(a));
-    let abs = dev.supported_absolute_axes();
-    let has_abs = |a| abs.is_some_and(|s| s.contains(a));
+    let keys: Vec<u16> = dev
+        .supported_keys()
+        .map(|k| k.iter().map(|c| c.code()).collect())
+        .unwrap_or_default();
+    let rel: Vec<u16> = dev
+        .supported_relative_axes()
+        .map(|r| r.iter().map(|a| a.0).collect())
+        .unwrap_or_default();
+    let abs: Vec<u16> = dev
+        .supported_absolute_axes()
+        .map(|r| r.iter().map(|a| a.0).collect())
+        .unwrap_or_default();
+    classify_codes(&keys, &rel, &abs)
+}
 
+pub fn classify_codes(keys: &[u16], rel: &[u16], abs: &[u16]) -> DeviceKind {
+    let has_key = |k: KeyCode| keys.contains(&k.code());
     let keyboard =
         has_key(KeyCode::KEY_A) && has_key(KeyCode::KEY_Z) && has_key(KeyCode::KEY_ENTER);
-    let mouse = has_rel(RelativeAxisCode::REL_X) && has_key(KeyCode::BTN_LEFT);
-    if has_abs(AbsoluteAxisCode::ABS_X) && !mouse {
+    let mouse = rel.contains(&RelativeAxisCode::REL_X.0) && has_key(KeyCode::BTN_LEFT);
+    if abs.contains(&AbsoluteAxisCode::ABS_X.0) && !mouse {
         return DeviceKind::Absolute;
     }
     match (keyboard, mouse) {
         (true, true) => DeviceKind::Combo,
         (true, false) => DeviceKind::Keyboard,
         (false, true) => DeviceKind::Mouse,
-        _ if keys.is_some_and(|k| k.iter().next().is_some()) => DeviceKind::Keys,
+        _ if !keys.is_empty() => DeviceKind::Keys,
         _ => DeviceKind::Other,
     }
+}
+
+/// Parse a sysfs capability bitmap ("ffff0000 0 0 0 0": hex longs, most
+/// significant first) into the set bit numbers.
+fn parse_caps(s: &str) -> Vec<u16> {
+    let words: Vec<u64> = s
+        .split_whitespace()
+        .map(|w| u64::from_str_radix(w, 16).unwrap_or(0))
+        .collect();
+    let bits = usize::BITS as usize;
+    let mut out = vec![];
+    for (i, w) in words.iter().enumerate() {
+        let base = (words.len() - 1 - i) * bits;
+        for b in 0..bits.min(64) {
+            if (w >> b) & 1 == 1 {
+                out.push((base + b) as u16);
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// Describe an event node from sysfs, without opening it.
+fn from_sysfs(path: &std::path::Path) -> Option<DeviceInfo> {
+    let node = path.file_name()?.to_str()?;
+    let dir = std::path::Path::new("/sys/class/input")
+        .join(node)
+        .join("device");
+    let read = |p: &str| {
+        std::fs::read_to_string(dir.join(p))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    };
+    let name = read("name");
+    if name.is_empty() {
+        return None;
+    }
+    let hex = |p: &str| u16::from_str_radix(&read(p), 16).unwrap_or(0);
+    let keys = parse_caps(&read("capabilities/key"));
+    let rel = parse_caps(&read("capabilities/rel"));
+    let abs = parse_caps(&read("capabilities/abs"));
+    Some(DeviceInfo {
+        path: path.to_path_buf(),
+        kind: classify_codes(&keys, &rel, &abs),
+        phys: read("phys"),
+        name,
+        vendor: hex("id/vendor"),
+        product: hex("id/product"),
+        keys,
+        accessible: false,
+    })
 }
 
 pub struct ScanResult {
@@ -125,17 +190,13 @@ pub fn scan() -> ScanResult {
             .unwrap_or(u32::MAX)
     });
     for path in paths {
-        match Device::open(&path) {
+        let info = match Device::open(&path) {
             Ok(dev) => {
-                let name = dev.name().unwrap_or("Unknown").to_string();
-                if name.starts_with(VIRTUAL_PREFIX) {
-                    continue;
-                }
                 let id = dev.input_id();
-                devices.push(DeviceInfo {
+                Some(DeviceInfo {
                     kind: classify(&dev),
                     phys: dev.physical_path().unwrap_or("").to_string(),
-                    name,
+                    name: dev.name().unwrap_or("Unknown").to_string(),
                     path,
                     vendor: id.vendor(),
                     product: id.product(),
@@ -143,10 +204,19 @@ pub fn scan() -> ScanResult {
                         .supported_keys()
                         .map(|k| k.iter().map(|c| c.code()).collect())
                         .unwrap_or_default(),
-                });
+                    accessible: true,
+                })
             }
-            Err(_) => unreadable += 1,
+            Err(_) => from_sysfs(&path),
+        };
+        let Some(info) = info else { continue };
+        if info.name.starts_with(VIRTUAL_PREFIX) {
+            continue;
         }
+        if !info.accessible {
+            unreadable += 1;
+        }
+        devices.push(info);
     }
     ScanResult {
         devices,
@@ -162,36 +232,97 @@ pub fn uinput_writable() -> bool {
         .is_ok()
 }
 
-/// Explain a missing 'input' group: not a member, or a member but this login
-/// session predates it (needs log out / reboot).
-pub fn group_hint() -> String {
-    let Ok(groups) = std::fs::read_to_string("/etc/group") else {
+/// Explain why InputForge can't create its virtual devices, if it can't.
+pub fn access_hint() -> String {
+    if uinput_writable() {
         return String::new();
-    };
-    let Some(line) = groups.lines().find(|l| l.starts_with("input:")) else {
-        return String::new();
-    };
-    let gid: u32 = line
-        .split(':')
-        .nth(2)
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(0);
-    let user = std::env::var("USER").unwrap_or_default();
-    let member = line
-        .rsplit(':')
-        .next()
-        .unwrap_or("")
-        .split(',')
-        .any(|u| u == user);
-    let mut buf = [0 as libc::gid_t; 256];
-    let n = unsafe { libc::getgroups(buf.len() as i32, buf.as_mut_ptr()) };
-    let active = n > 0 && buf[..n as usize].contains(&gid);
-    match (member, active) {
-        (_, true) => String::new(),
-        (true, false) => "You were added to the 'input' group, but this login session started \
-before that. Log out of the desktop completely and back in (or reboot), then retry."
-            .into(),
-        (false, _) => "You are not in the 'input' group. Run the installer.".into(),
+    }
+    "InputForge can't create its virtual keyboard and mouse (/dev/uinput). Install the \
+package or run the installer, then unplug/replug or log out and back in."
+        .into()
+}
+
+// ───────────────────────── per-device access (udev uaccess) ─────────────────────────
+
+/// Rules written by `inputforge --udev-allow`, one line per device the user
+/// turned on. uaccess = only the user at the active local session gets an ACL.
+pub const DEVICE_RULES: &str = "/etc/udev/rules.d/70-inputforge-devices.rules";
+const RULE_MARK: &str = "# inputforge-device ";
+
+/// Vendor:product ids currently granted.
+pub fn granted_ids() -> Vec<(u16, u16)> {
+    let s = std::fs::read_to_string(DEVICE_RULES).unwrap_or_default();
+    s.lines()
+        .filter_map(|l| l.strip_prefix(RULE_MARK))
+        .filter_map(parse_id)
+        .collect()
+}
+
+pub fn parse_id(s: &str) -> Option<(u16, u16)> {
+    let (v, p) = s.trim().split_once(':')?;
+    if v.len() != 4 || p.len() != 4 {
+        return None;
+    }
+    Some((
+        u16::from_str_radix(v, 16).ok()?,
+        u16::from_str_radix(p, 16).ok()?,
+    ))
+}
+
+pub fn render_rules(ids: &[(u16, u16)]) -> String {
+    let mut s = String::from(
+        "# Managed by InputForge (inputforge --udev-allow / --udev-revoke).\n\
+# Gives the user at the active local session (uaccess) read access to the input\n\
+# event nodes of these devices only, so InputForge can remap them.\n",
+    );
+    for (v, p) in ids {
+        s.push_str(&format!(
+            "{RULE_MARK}{v:04x}:{p:04x}\nSUBSYSTEM==\"input\", KERNEL==\"event*\", ATTRS{{id/vendor}}==\"{v:04x}\", ATTRS{{id/product}}==\"{p:04x}\", TAG+=\"uaccess\"\n"
+        ));
+    }
+    s
+}
+
+/// Root side: add or remove device ids, rewrite the rules file, re-apply.
+pub fn udev_update(add: &[(u16, u16)], remove: &[(u16, u16)]) -> anyhow::Result<Vec<(u16, u16)>> {
+    if unsafe { libc::geteuid() } != 0 {
+        anyhow::bail!("must run as root (it is normally started through pkexec)");
+    }
+    let mut ids = granted_ids();
+    ids.retain(|i| !remove.contains(i));
+    for i in add {
+        if !ids.contains(i) {
+            ids.push(*i);
+        }
+    }
+    ids.sort_unstable();
+    let tmp = format!("{DEVICE_RULES}.tmp");
+    std::fs::write(&tmp, render_rules(&ids))?;
+    std::fs::rename(&tmp, DEVICE_RULES)?;
+    let run = |args: &[&str]| std::process::Command::new("udevadm").args(args).status();
+    run(&["control", "--reload-rules"])?;
+    run(&["trigger", "--subsystem-match=input", "--action=change"])?;
+    run(&["settle", "--timeout=5"])?;
+    Ok(ids)
+}
+
+/// User side: ask (polkit password prompt) to grant access to `ids`.
+pub fn request_access(ids: &[(u16, u16)]) -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?;
+    let args: Vec<String> = ids
+        .iter()
+        .map(|(v, p)| format!("{v:04x}:{p:04x}"))
+        .collect();
+    let st = std::process::Command::new("pkexec")
+        .arg(exe)
+        .arg("--udev-allow")
+        .args(&args)
+        .status()?;
+    match st.code() {
+        Some(0) => Ok(()),
+        Some(126) => anyhow::bail!("permission request was cancelled"),
+        Some(127) => anyhow::bail!("not authorized"),
+        _ => anyhow::bail!("granting access failed ({st})"),
     }
 }
 
@@ -343,7 +474,21 @@ mod group_tests {
             vendor: v,
             product: p,
             keys: vec![],
+            accessible: true,
         }
+    }
+    #[test]
+    fn caps_and_rules() {
+        assert_eq!(parse_caps("1943"), vec![0, 1, 6, 8, 11, 12]);
+        let k = parse_caps("ffff0000 0 0 0 0");
+        assert!(k.contains(&0x110) && k.contains(&0x11f) && !k.contains(&0x120));
+        assert_eq!(parse_id("046d:c24a"), Some((0x046d, 0xc24a)));
+        assert_eq!(parse_id("046d:c24a\"; RUN+=\"x"), None);
+        assert_eq!(parse_id("46d:c24a"), None);
+        let r = render_rules(&[(0x046d, 0xc24a)]);
+        assert!(
+            r.contains("ATTRS{id/vendor}==\"046d\", ATTRS{id/product}==\"c24a\", TAG+=\"uaccess\"")
+        );
     }
     #[test]
     fn groups_real_devices() {

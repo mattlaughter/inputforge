@@ -1,0 +1,18 @@
+# InputForge udev rules. Access is per device and per session: TAG+="uaccess" gives
+# the user at the active local seat an ACL on the node (logind manages it), instead
+# of putting anyone in the 'input' group (which would let every program they run
+# read every keyboard). Must sort before 73-seat-late.rules, which applies uaccess.
+
+# Virtual keyboard/mouse output (same rule as Steam's 60-steam-input.rules).
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
+
+# Built-in lighting: only the vendor-specific (HID++ / config) hidraw interfaces of
+# the supported devices. Their typing/pointer interfaces are interface 0 and are
+# deliberately NOT exposed over hidraw.
+#   Logitech G815 / G813 (wired): interface 1 = HID++ (usage page 0xFF43)
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c33f|c232", ATTRS{bInterfaceNumber}=="01", TAG+="uaccess"
+#   Logitech G600: interface 1 = config/LED (usage page 0xFF80)
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c24a", ATTRS{bInterfaceNumber}=="01", TAG+="uaccess"
+
+# Keyboards/mice the user turned on in InputForge get their own rules in
+# /etc/udev/rules.d/70-inputforge-devices.rules (written by `inputforge --udev-allow`).

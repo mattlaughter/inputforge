@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# InputForge installer: builds release binary, installs udev rule, adds you to
-# the 'input' group, and installs the icon + desktop entry. Run with: sudo ./install.sh
+# InputForge installer: builds the release binary and installs it with its udev
+# rules (per-device uaccess, no 'input' group), icon and desktop entry. Run with: sudo ./install.sh
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -23,8 +23,8 @@ echo "==> Installing binary, udev rules, icons, desktop entry"
 
 cat <<EOF
 
-Done. Log out and back in (or reboot) so the 'input' group takes effect.
-Then launch "InputForge" from your app menu, or run: inputforge
+Done. Launch "InputForge" from your app menu, or run: inputforge
+Turning a keyboard or mouse on asks for your password once, to grant access to that device.
 Closing the window keeps it in the system tray; turn on Settings -> "Start at login".
 
 Optional extras for the "DPI & RGB" tab:
