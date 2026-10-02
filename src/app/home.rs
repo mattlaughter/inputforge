@@ -395,11 +395,7 @@ impl App {
     }
 
     fn lighting_model(&self, d: &PhysDevice) -> Option<Model> {
-        let m = match d.product {
-            0xc33f | 0xc232 if d.vendor == 0x046d => Model::G815,
-            0xc24a if d.vendor == 0x046d => Model::G600,
-            _ => return None,
-        };
+        let m = Model::from_product(d.vendor, d.product)?;
         self.light_found.iter().any(|f| f.model == m).then_some(m)
     }
 
@@ -696,8 +692,8 @@ impl App {
                     ui.add_space(8.0);
                     match section {
                         Section::Lighting => match self.lighting_model(&d) {
-                            Some(Model::G815) => self.ui_kb_lighting(ui),
                             Some(Model::G600) => self.ui_mouse_lighting(ui),
+                            Some(m) => self.ui_kb_lighting(ui, m),
                             None => {}
                         },
                         Section::Assignments => self.ui_assignments(ui, &d),

@@ -3,6 +3,9 @@
 //! Supported:
 //!   * Logitech G815 / G813 (wired, 046d:c33f / c232) — per-key direct colors, static,
 //!     breathing, color cycle. HID++ long reports (id 0x11) on the 0xFF43 interface.
+//!   * Logitech G915 TKL (wired 046d:c343, LIGHTSPEED receiver 046d:c545) — same HID++ 4522/8071/8081
+//!     lighting features as the G815, but on the 0xFF00 interface 2 with feature indices that are
+//!     looked up at run time, and no numpad / G-keys. Untested on hardware by the author.
 //!   * Logitech G600 (046d:c24a) — static, breathing, cycle via feature report 0xF1.
 //!
 //! Protocol details follow OpenRGB's GPL drivers (LogitechG815Controller,
@@ -134,6 +137,7 @@ pub struct LightingSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Model {
     G815,
+    G915Tkl,
     G600,
 }
 
@@ -141,7 +145,33 @@ impl Model {
     pub fn name(self) -> &'static str {
         match self {
             Model::G815 => "Logitech G815 keyboard",
+            Model::G915Tkl => "Logitech G915 TKL keyboard",
             Model::G600 => "Logitech G600 mouse",
+        }
+    }
+
+    pub fn is_keyboard(self) -> bool {
+        matches!(self, Model::G815 | Model::G915Tkl)
+    }
+
+    /// Which LEDs physically exist (the TKL has no numpad and no G-keys).
+    pub fn has_led(self, led: usize) -> bool {
+        match self {
+            Model::G915Tkl => !(79..=95).contains(&led) && !(112..=116).contains(&led),
+            _ => true,
+        }
+    }
+
+    /// USB product id -> model, for devices that are lighting-capable by id alone.
+    pub fn from_product(vendor: u16, product: u16) -> Option<Model> {
+        if vendor != 0x046d {
+            return None;
+        }
+        match product {
+            0xc33f | 0xc232 => Some(Model::G815),
+            0xc343 | 0xc545 => Some(Model::G915Tkl),
+            0xc24a => Some(Model::G600),
+            _ => None,
         }
     }
 }
@@ -149,16 +179,43 @@ impl Model {
 #[derive(Debug, Clone)]
 pub struct Found {
     pub model: Model,
+    /// HID++ device index: 0xFF for a wired keyboard, 1 behind a LIGHTSPEED receiver.
+    pub dev_index: u8,
     pub path: PathBuf,
     #[allow(dead_code)]
     pub product: String,
     pub accessible: bool,
 }
 
-fn report_descriptor_has(dir: &Path, needle: &[u8]) -> bool {
-    std::fs::read(dir.join("device/report_descriptor"))
-        .map(|d| d.windows(needle.len()).any(|w| w == needle))
-        .unwrap_or(false)
+fn has_bytes(desc: &[u8], needle: &[u8]) -> bool {
+    desc.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Decide whether a hidraw node is a lighting interface we drive.
+/// `iface` is the USB interface number, `desc` the HID report descriptor.
+/// Returns the model and the HID++ device index to address.
+pub fn classify_hidraw(
+    vendor: u16,
+    product: u16,
+    iface: Option<u8>,
+    desc: &[u8],
+) -> Option<(Model, u8)> {
+    let model = Model::from_product(vendor, product)?;
+    match model {
+        // Usage page 0xFF43 (HID++ for keyboards) => bytes 06 43 FF
+        Model::G815 if has_bytes(desc, &[0x06, 0x43, 0xff]) => Some((model, 0xFF)),
+        // Usage page 0xFF80 with feature report 0xF1
+        Model::G600 if has_bytes(desc, &[0x06, 0x80, 0xff]) => Some((model, 0xFF)),
+        // Vendor page 0xFF00 on interface 2 carrying report id 0x11 (HID++ long).
+        Model::G915Tkl
+            if iface.is_none_or(|i| i == 2)
+                && has_bytes(desc, &[0x06, 0x00, 0xff])
+                && has_bytes(desc, &[0x85, 0x11]) =>
+        {
+            Some((model, if product == 0xc343 { 0xFF } else { 0x01 }))
+        }
+        _ => None,
+    }
 }
 
 /// Find supported lighting devices.
@@ -188,12 +245,13 @@ pub fn discover() -> Vec<Found> {
         if id.len() != 3 || id[1] != 0x046d {
             continue;
         }
-        let model = match id[2] {
-            // Usage page 0xFF43 (HID++ for keyboards) => bytes 06 43 FF
-            0xc33f | 0xc232 if report_descriptor_has(&dir, &[0x06, 0x43, 0xff]) => Model::G815,
-            // Usage page 0xFF80 with feature report 0xF1
-            0xc24a if report_descriptor_has(&dir, &[0x06, 0x80, 0xff]) => Model::G600,
-            _ => continue,
+        let desc = std::fs::read(dir.join("device/report_descriptor")).unwrap_or_default();
+        let iface = std::fs::read_to_string(dir.join("device/../bInterfaceNumber"))
+            .ok()
+            .and_then(|s| u8::from_str_radix(s.trim(), 16).ok());
+        let Some((model, dev_index)) = classify_hidraw(id[1] as u16, id[2] as u16, iface, &desc)
+        else {
+            continue;
         };
         let path = PathBuf::from("/dev").join(dir.file_name().unwrap());
         let accessible = OpenOptions::new()
@@ -203,6 +261,7 @@ pub fn discover() -> Vec<Found> {
             .is_ok();
         out.push(Found {
             model,
+            dev_index,
             path,
             product: get("HID_NAME="),
             accessible,
@@ -460,34 +519,151 @@ fn g815_frames(changes: &[(usize, Rgb)]) -> Vec<(u8, [u8; 16])> {
     frames
 }
 
-fn hidpp(feature: u8, func: u8) -> [u8; 20] {
+/// HID++ long report (id 0x11) addressed to device index `dev`
+/// (0xFF = wired device, 1 = first device behind a LIGHTSPEED receiver).
+fn hidpp(dev: u8, feature: u8, func: u8) -> [u8; 20] {
     let mut b = [0u8; 20];
     b[0] = 0x11;
-    b[1] = 0xFF;
+    b[1] = dev;
     b[2] = feature;
     b[3] = func;
     b
 }
 
-struct G815 {
+/// Slots (feature indices) of the HID++ features used for lighting. The G815's
+/// are fixed; the G915 TKL's are looked up from the device at run time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Features {
+    /// 0x4522: take/return control of the lighting from the onboard profile.
+    ctl: u8,
+    /// 0x8071: RGB effects (G915 effects and direct-mode switch).
+    fx: u8,
+    /// 0x8081: per-key colour frames and commit.
+    keys: u8,
+}
+
+const G815_FEATURES: Features = Features {
+    ctl: 0x08,
+    fx: 0x0F,
+    keys: 0x10,
+};
+
+/// G915 effect packet for one zone (1 = keys, 0 = logo). `mode` uses the key
+/// numbering: 2 = breathing, 3 = cycle. The logo numbers those two the other way round.
+fn g915_effect_packet(
+    dev: u8,
+    f: Features,
+    zone: u8,
+    mode: u8,
+    color: Rgb,
+    period_ms: u32,
+) -> [u8; 20] {
+    let ms = period_ms.clamp(1000, 20000) as u16;
+    let mode = if zone == 0 {
+        match mode {
+            2 => 3,
+            3 => 2,
+            m => m,
+        }
+    } else {
+        mode
+    };
+    let breathing = if zone == 0 { 3 } else { 2 };
+    let cycle = if zone == 0 { 2 } else { 3 };
+    let mut p = hidpp(dev, f.fx, 0x1E);
+    p[4] = zone;
+    p[5] = mode;
+    p[6..9].copy_from_slice(&color);
+    if mode == breathing {
+        p[9] = (ms >> 8) as u8;
+        p[10] = ms as u8;
+        p[12] = 0x64;
+    } else if mode == cycle {
+        p[11] = (ms >> 8) as u8;
+        p[12] = ms as u8;
+        p[13] = 0x64;
+    } else if mode == 1 {
+        p[9] = 0x02;
+    }
+    p[16] = 0x01;
+    p
+}
+
+/// Lighting driver for the G815 family and the G915 TKL (same direct-mode protocol).
+struct Keyboard {
     dev: Hidraw,
+    model: Model,
+    index: u8,
+    f: Features,
     direct: bool,
     shown: Vec<Option<Rgb>>,
 }
 
-impl G815 {
-    fn open(path: &Path) -> Result<Self> {
-        Ok(Self {
-            dev: Hidraw::open(path)?,
+impl Keyboard {
+    fn open(found: &Found) -> Result<Self> {
+        let mut k = Self {
+            dev: Hidraw::open(&found.path)?,
+            model: found.model,
+            index: found.dev_index,
+            f: G815_FEATURES,
             direct: false,
             shown: vec![None; G815_LEDS.len()],
+        };
+        // Feature slots differ between models and firmware; ask the keyboard. If it can't
+        // answer (G815 asleep, say), fall back to the G815's usual slots.
+        match k.lookup_features() {
+            Ok(f) => k.f = f,
+            Err(e) if found.model == Model::G915Tkl => return Err(e),
+            Err(_) => {}
+        }
+        Ok(k)
+    }
+
+    fn pkt(&self, feature: u8, func: u8) -> [u8; 20] {
+        hidpp(self.index, feature, func)
+    }
+
+    /// HID++ 2.0 IRoot.GetFeature: where does feature `id` live on this device?
+    fn feature_index(&mut self, id: u16) -> Result<Option<u8>> {
+        let mut p = hidpp(self.index, 0x00, 0x0E);
+        p[4] = (id >> 8) as u8;
+        p[5] = id as u8;
+        self.dev.write(&p)?;
+        let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+        while let Some(rem) = deadline.checked_duration_since(std::time::Instant::now()) {
+            let Some(r) = self.dev.read_timeout(rem) else {
+                break;
+            };
+            if r.len() >= 5 && r[0] == 0x11 && r[2] == 0x00 && r[3] == 0x0E {
+                return Ok((r[4] != 0).then_some(r[4]));
+            }
+            if r.len() >= 6 && r[0] == 0x11 && r[2] == 0xFF && r[3] == 0x00 {
+                bail!("keyboard returned HID++ error {:#04x} while probing", r[5]);
+            }
+        }
+        bail!("no answer from the keyboard (switched off, asleep or out of range?)")
+    }
+
+    fn lookup_features(&mut self) -> Result<Features> {
+        let mut need = |id: u16, what: &str| -> Result<u8> {
+            self.feature_index(id)?.with_context(|| {
+                format!(
+                    "this keyboard has no HID++ {what} feature ({id:#06x}); \
+it may be a model InputForge doesn't support yet"
+                )
+            })
+        };
+        Ok(Features {
+            ctl: need(0x4522, "lighting-control")?,
+            fx: need(0x8071, "RGB-effects")?,
+            keys: need(0x8081, "per-key-lighting")?,
         })
     }
 
     fn send(&mut self, pkt: [u8; 20]) -> Result<()> {
         self.dev.write(&pkt)?;
         // Wait for the matching acknowledgement; HID++ 2.0 errors come back as
-        // [0x11, 0xFF, 0xFF, feature, func, code].
+        // [0x11, dev, 0xFF, feature, func, code].
         let deadline = std::time::Instant::now() + G815_READ_TIMEOUT;
         while let Some(rem) = deadline.checked_duration_since(std::time::Instant::now()) {
             let Some(r) = self.dev.read_timeout(rem) else {
@@ -509,16 +685,16 @@ impl G815 {
     }
 
     fn commit(&mut self) -> Result<()> {
-        self.send(hidpp(0x10, 0x7F))
+        self.send(self.pkt(self.f.keys, 0x7F))
     }
 
     fn init_direct(&mut self) -> Result<()> {
-        self.send(hidpp(0x08, 0x3E))?;
-        self.send(hidpp(0x08, 0x1E))?;
-        let mut p = hidpp(0x0F, 0x1E);
+        self.send(self.pkt(self.f.ctl, 0x3E))?;
+        self.send(self.pkt(self.f.ctl, 0x1E))?;
+        let mut p = self.pkt(self.f.fx, 0x1E);
         p[0x10] = 0x01;
         self.send(p)?;
-        let mut p = hidpp(0x0F, 0x1E);
+        let mut p = self.pkt(self.f.fx, 0x1E);
         p[0x04] = 0x01;
         p[0x10] = 0x01;
         self.send(p)?;
@@ -535,6 +711,7 @@ impl G815 {
             .iter()
             .enumerate()
             .take(G815_LEDS.len())
+            .filter(|(i, _)| self.model.has_led(*i))
             .filter(|(i, c)| self.shown[*i] != Some(**c))
             .map(|(i, c)| (i, *c))
             .collect();
@@ -542,7 +719,7 @@ impl G815 {
             return Ok(());
         }
         for (ty, data) in g815_frames(&changes) {
-            let mut p = hidpp(0x10, ty);
+            let mut p = self.pkt(self.f.keys, ty);
             p[4..20].copy_from_slice(&data);
             self.send(p)?;
         }
@@ -555,24 +732,19 @@ impl G815 {
 
     /// Onboard effect (2 = breathing, 3 = cycle) on keyboard + logo zones.
     fn set_effect(&mut self, mode: u8, color: Rgb, period_ms: u32) -> Result<()> {
-        let period = period_ms.clamp(1000, 20000) as u16;
-        for zone in [0u8, 1u8] {
-            let mut p = hidpp(0x0D, 0x3D);
-            p[4] = zone;
-            p[5] = mode;
-            p[6..9].copy_from_slice(&color);
-            if mode == 3 {
-                p[11] = (period >> 8) as u8;
-                p[12] = period as u8;
-                p[13] = 0x64;
-            } else {
-                p[9] = (period >> 8) as u8;
-                p[10] = period as u8;
-                p[12] = 0x64;
-            }
-            self.send(p)?;
+        // OpenRGB's mode-set preamble, then one packet per zone (keys, logo).
+        let mut p = self.pkt(self.f.fx, 0x5E);
+        p[4] = 0x01;
+        p[5] = 0x03;
+        p[6] = 0x07;
+        self.send(p)?;
+        self.send(self.pkt(self.f.ctl, 0x3E))?;
+        self.send(self.pkt(self.f.ctl, 0x1E))?;
+        for zone in [1u8, 0u8] {
+            self.send(g915_effect_packet(
+                self.index, self.f, zone, mode, color, period_ms,
+            ))?;
         }
-        self.commit()?;
         self.direct = false;
         Ok(())
     }
@@ -650,7 +822,7 @@ impl Lighting {
 }
 
 fn worker(rx: Receiver<Job>, status: Arc<Mutex<String>>, repaint: impl Fn()) {
-    let mut kb: Option<G815> = None;
+    let mut kb: Option<Keyboard> = None;
     while let Ok(first) = rx.recv() {
         // Coalesce: keep only the latest job per device.
         let (mut kb_job, mut mouse_job) = (None, None);
@@ -669,10 +841,13 @@ fn worker(rx: Receiver<Job>, status: Arc<Mutex<String>>, repaint: impl Fn()) {
             let r = (|| -> Result<()> {
                 let f = found
                     .iter()
-                    .find(|f| f.model == Model::G815)
-                    .context("G815 not connected")?;
+                    .find(|f| f.model.is_keyboard())
+                    .context("no supported keyboard connected")?;
+                if kb.as_ref().is_some_and(|k| k.model != f.model) {
+                    kb = None;
+                }
                 if kb.is_none() {
-                    kb = Some(G815::open(&f.path)?);
+                    kb = Some(Keyboard::open(f)?);
                 }
                 let res = kb.as_mut().unwrap().apply(&s);
                 if res.is_err() {
@@ -701,12 +876,76 @@ fn worker(rx: Receiver<Job>, status: Arc<Mutex<String>>, repaint: impl Fn()) {
     }
 }
 
+/// Diagnostics for bug reports (`inputforge --lighting-info`): every Logitech hidraw node, how it
+/// was classified and whether this user can open it.
+pub fn describe_hidraw() -> Vec<String> {
+    let mut out = vec![];
+    let Ok(rd) = std::fs::read_dir("/sys/class/hidraw") else {
+        return vec!["no /sys/class/hidraw".into()];
+    };
+    let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for dir in entries {
+        let uevent = std::fs::read_to_string(dir.join("device/uevent")).unwrap_or_default();
+        let get = |k: &str| {
+            uevent
+                .lines()
+                .find_map(|l| l.strip_prefix(k))
+                .unwrap_or("")
+                .to_string()
+        };
+        let id: Vec<u32> = get("HID_ID=")
+            .split(':')
+            .filter_map(|s| u32::from_str_radix(s, 16).ok())
+            .collect();
+        if id.len() != 3 || id[1] != 0x046d {
+            continue;
+        }
+        let desc = std::fs::read(dir.join("device/report_descriptor")).unwrap_or_default();
+        let iface = std::fs::read_to_string(dir.join("device/../bInterfaceNumber"))
+            .ok()
+            .and_then(|s| u8::from_str_radix(s.trim(), 16).ok());
+        let node = PathBuf::from("/dev").join(dir.file_name().unwrap());
+        let open = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&node)
+            .is_ok();
+        let class = match classify_hidraw(id[1] as u16, id[2] as u16, iface, &desc) {
+            Some((m, i)) => format!("{} (hid++ index {i:#04x})", m.name()),
+            None => "not a lighting interface".into(),
+        };
+        let head: String = desc
+            .iter()
+            .take(12)
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push(format!(
+            "{} {:04x}:{:04x} iface={} {}  {}  descriptor[{}B]: {head}",
+            node.display(),
+            id[1],
+            id[2],
+            iface.map_or("?".into(), |i| i.to_string()),
+            if open { "access" } else { "NO-ACCESS" },
+            class,
+            desc.len(),
+        ));
+    }
+    if out.is_empty() {
+        out.push("no Logitech hidraw devices found".into());
+    }
+    out
+}
+
 /// Apply saved settings synchronously (for `--apply-lighting` at login).
 pub fn apply_now(s: &LightingSettings) -> Vec<String> {
     let mut out = vec![];
     for f in discover() {
         let r = match f.model {
-            Model::G815 => G815::open(&f.path).and_then(|mut k| k.apply(&s.keyboard)),
+            Model::G815 | Model::G915Tkl => {
+                Keyboard::open(&f).and_then(|mut k| k.apply(&s.keyboard))
+            }
             Model::G600 => g600_apply(&f.path, &s.mouse),
         };
         out.push(match r {
@@ -744,6 +983,73 @@ pub fn set_autostart(on: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A wired G915 TKL: interface 2, vendor page 0xFF00, HID++ long report id 0x11.
+    const TKL_DESC: &[u8] = &[0x06, 0x00, 0xff, 0x09, 0x02, 0xa1, 0x01, 0x85, 0x11];
+
+    #[test]
+    fn classifies_g915_tkl_wired_and_receiver() {
+        assert_eq!(
+            classify_hidraw(0x046d, 0xc343, Some(2), TKL_DESC),
+            Some((Model::G915Tkl, 0xFF))
+        );
+        assert_eq!(
+            classify_hidraw(0x046d, 0xc545, Some(2), TKL_DESC),
+            Some((Model::G915Tkl, 0x01))
+        );
+        // the typing interface (no vendor HID++ descriptor) and other interfaces are not ours
+        assert_eq!(classify_hidraw(0x046d, 0xc343, Some(1), TKL_DESC), None);
+        assert_eq!(
+            classify_hidraw(0x046d, 0xc343, Some(2), &[0x05, 0x01, 0x09, 0x06]),
+            None
+        );
+        assert_eq!(classify_hidraw(0x1234, 0xc343, Some(2), TKL_DESC), None);
+        // G815 and G600 unchanged
+        assert_eq!(
+            classify_hidraw(0x046d, 0xc33f, Some(1), &[0x06, 0x43, 0xff]),
+            Some((Model::G815, 0xFF))
+        );
+        assert_eq!(
+            classify_hidraw(0x046d, 0xc24a, Some(1), &[0x06, 0x80, 0xff]),
+            Some((Model::G600, 0xFF))
+        );
+    }
+
+    #[test]
+    fn tkl_skips_numpad_and_gkeys() {
+        for led in 0..G815_LEDS.len() {
+            let numpad_or_g = (79..=95).contains(&led) || (112..=116).contains(&led);
+            assert_eq!(Model::G915Tkl.has_led(led), !numpad_or_g, "led {led}");
+            assert!(Model::G815.has_led(led));
+        }
+        // numpad = HID usages 0x53..=0x63, G-keys = the GKeys zone
+        for (i, (_, zone, code)) in G815_LEDS.iter().enumerate() {
+            let numpad = matches!(zone, Zone::Keyboard) && (0x53..=0x63).contains(code);
+            let gkey = matches!(zone, Zone::GKeys);
+            assert_eq!(Model::G915Tkl.has_led(i), !(numpad || gkey), "led {i}");
+        }
+    }
+
+    #[test]
+    fn g915_effect_packets_match_openrgb() {
+        let f = Features {
+            ctl: 0x0E,
+            fx: 0x09,
+            keys: 0x0A,
+        };
+        // keys, breathing, 3 s
+        let p = g915_effect_packet(0xFF, f, 1, 2, [1, 2, 3], 3000);
+        assert_eq!(&p[..9], &[0x11, 0xFF, 0x09, 0x1E, 1, 2, 1, 2, 3]);
+        assert_eq!((p[9], p[10], p[12]), (0x0B, 0xB8, 0x64));
+        // keys, cycle
+        let p = g915_effect_packet(0xFF, f, 1, 3, [0, 0, 0], 3000);
+        assert_eq!((p[5], p[11], p[12], p[13]), (3, 0x0B, 0xB8, 0x64));
+        // logo uses the opposite numbering: breathing = 3, cycle = 2
+        assert_eq!(g915_effect_packet(0xFF, f, 0, 2, [0; 3], 3000)[5], 3);
+        assert_eq!(g915_effect_packet(0xFF, f, 0, 3, [0; 3], 3000)[5], 2);
+        // behind a receiver the packet is addressed to device 1
+        assert_eq!(g915_effect_packet(1, f, 1, 2, [0; 3], 3000)[1], 1);
+    }
 
     #[test]
     fn frame_key_mapping() {

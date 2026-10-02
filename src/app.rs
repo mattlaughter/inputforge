@@ -1097,7 +1097,7 @@ impl App {
         });
     }
 
-    fn ui_kb_lighting(&mut self, ui: &mut egui::Ui) {
+    fn ui_kb_lighting(&mut self, ui: &mut egui::Ui, model: crate::lighting::Model) {
         use crate::lighting::{self as l, KbMode};
         let muted = self.colors.muted;
         self.lighting_status(ui);
@@ -1151,7 +1151,7 @@ impl App {
                 .small(),
             );
             ui.add_space(6.0);
-            keyboard_painter(ui, &mut k.keys, &mut self.brush);
+            keyboard_painter(ui, model, &mut k.keys, &mut self.brush);
         } else {
             // Preview
             let base = match k.mode {
@@ -1160,7 +1160,9 @@ impl App {
             };
             let mut preview = vec![base; l::G815_LEDS.len()];
             let mut dummy = self.brush;
-            ui.add_enabled_ui(false, |ui| keyboard_painter(ui, &mut preview, &mut dummy));
+            ui.add_enabled_ui(false, |ui| {
+                keyboard_painter(ui, model, &mut preview, &mut dummy)
+            });
         }
         if self.cfg.lighting.keyboard != before {
             self.lighting.apply_keyboard(&self.cfg.lighting.keyboard);
@@ -1595,10 +1597,45 @@ fn g815_layout() -> &'static [(usize, f32, f32, f32, f32)] {
     })
 }
 
+/// The layout for one model. The G915 TKL has no numpad and no G-keys, so those are
+/// dropped, the rest shifts left and its media keys move up to the right edge.
+fn layout_for(model: crate::lighting::Model) -> Vec<(usize, f32, f32, f32, f32)> {
+    let full = g815_layout();
+    if model != crate::lighting::Model::G915Tkl {
+        return full.to_vec();
+    }
+    full.iter()
+        .filter(|(led, ..)| model.has_led(*led))
+        .map(|&(led, x, y, w, h)| {
+            let x = x - 1.5; // no G-key column
+            let x = match led {
+                106..=109 => x - 3.25, // media keys: 15.25..18.25
+                111 => 14.25,          // brightness
+                _ => x,
+            };
+            (led, x, y, w, h)
+        })
+        .collect()
+}
+
+fn layout_width(model: crate::lighting::Model) -> f32 {
+    if model == crate::lighting::Model::G915Tkl {
+        19.25
+    } else {
+        24.0
+    }
+}
+
 /// Draw the G815 layout; click/drag paints with `brush`, right-click samples.
-fn keyboard_painter(ui: &mut egui::Ui, keys: &mut [[u8; 3]], brush: &mut [u8; 3]) {
+fn keyboard_painter(
+    ui: &mut egui::Ui,
+    model: crate::lighting::Model,
+    keys: &mut [[u8; 3]],
+    brush: &mut [u8; 3],
+) {
     use crate::lighting::G815_LEDS;
-    let (units_w, units_h) = (24.0_f32, 7.5_f32);
+    let layout = layout_for(model);
+    let (units_w, units_h) = (layout_width(model), 7.5_f32);
     let pad_u = 0.35;
     let avail = ui.available_width().min(1200.0);
     let u = (avail / (units_w + 2.0 * pad_u)).clamp(20.0, 46.0);
@@ -1620,7 +1657,7 @@ fn keyboard_painter(ui: &mut egui::Ui, keys: &mut [[u8; 3]], brush: &mut [u8; 3]
         None
     };
     let fg = ui.visuals().strong_text_color();
-    for &(led, x, y, w, h) in g815_layout() {
+    for &(led, x, y, w, h) in &layout {
         let kr =
             egui::Rect::from_min_size(origin + egui::vec2(x * u, y * u), egui::vec2(w * u, h * u))
                 .shrink(u * 0.07);
@@ -1685,6 +1722,33 @@ mod layout_tests {
         let n = crate::lighting::G815_LEDS.len();
         let missing: Vec<_> = (0..n).filter(|i| !seen.contains(i)).collect();
         assert_eq!(missing, vec![46, 96]);
+    }
+
+    #[test]
+    fn tkl_layout_has_no_numpad_or_gkeys_and_fits() {
+        use crate::lighting::Model;
+        let l = super::layout_for(Model::G915Tkl);
+        let seen: std::collections::HashSet<_> = l.iter().map(|k| k.0).collect();
+        for led in 0..crate::lighting::G815_LEDS.len() {
+            assert_eq!(
+                seen.contains(&led),
+                Model::G915Tkl.has_led(led) && led != 46 && led != 96,
+                "led {led}"
+            );
+        }
+        let w = super::layout_width(Model::G915Tkl);
+        for (i, a) in l.iter().enumerate() {
+            assert!(
+                a.1 >= 0.0 && a.1 + a.3 <= w + 0.01,
+                "key {} out of bounds",
+                a.0
+            );
+            for b in &l[i + 1..] {
+                let ox = a.1 < b.1 + b.3 - 0.01 && b.1 < a.1 + a.3 - 0.01;
+                let oy = a.2 < b.2 + b.4 - 0.01 && b.2 < a.2 + a.4 - 0.01;
+                assert!(!(ox && oy), "keys {} and {} overlap", a.0, b.0);
+            }
+        }
         for (i, a) in l.iter().enumerate() {
             for b in &l[i + 1..] {
                 let ox = a.1 < b.1 + b.3 - 0.01 && b.1 < a.1 + a.3 - 0.01;

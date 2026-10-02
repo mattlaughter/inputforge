@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-10-02
+
+- **New: Logitech G915 TKL lighting** (wired `046d:c343`, or through its LIGHTSPEED receiver
+  `046d:c545`): static, per-key, breathing, cycle and off, with a TKL-shaped key painter (no numpad,
+  no G-keys). It uses the G815's per-key protocol; because the TKL numbers its HID++ features
+  differently, InputForge asks the keyboard where they are instead of assuming. **Not yet tested
+  on real hardware**; please report results.
+- The udev rules cover the TKL's lighting interface (interface 2) only, never its typing interface.
+
 ## 0.2.1 — 2026-10-02
 
 - Fix: in 0.2.0 the lighting rule never matched (udev needs every `ATTRS{}` key on the same

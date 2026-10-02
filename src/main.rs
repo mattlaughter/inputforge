@@ -79,6 +79,13 @@ fn main() -> eframe::Result {
         }
     }
 
+    if args.iter().any(|a| a == "--lighting-info") {
+        for l in lighting::describe_hidraw() {
+            println!("{l}");
+        }
+        return Ok(());
+    }
+
     if args.iter().any(|a| a == "--apply-lighting") {
         let cfg = config::Config::load().unwrap_or_default();
         for line in lighting::apply_now(&cfg.lighting) {

@@ -27,7 +27,8 @@ X11, and in games.
   Click one to change it to another key, a shortcut (e.g. Ctrl+C), a macro, the autoclicker
   toggle, or nothing. *Find by pressing* jumps to a key when you press it. Profiles let you keep
   several sets of assignments.
-- **Built-in RGB lighting** for the Logitech G815/G813 (per-key painting, solid, breathing,
+- **Built-in RGB lighting** for the Logitech G815/G813 and G915 TKL (wired or LIGHTSPEED receiver;
+  the TKL is new and untested on hardware: per-key painting, solid, breathing,
   rainbow) and G600 (solid, breathing, rainbow). No OpenRGB or other tools are needed. The
   colours are restored at login.
 - **Macros:** taps, key down/up, typed text (US QWERTY layout only), delays, mouse moves and scrolls. Each macro runs
@@ -110,6 +111,7 @@ with `sudo gpasswd -d $USER input`, log out and back in, then turn your devices 
 ```bash
 inputforge                  # open the window (or show the running one)
 inputforge --background     # start in the tray only (used at login)
+inputforge --lighting-info   # Logitech hidraw nodes and how they're classified (for bug reports)
 inputforge --list-devices   # devices with vendor:product ids and access status
 inputforge --apply-lighting # apply the saved lighting and exit
 inputforge --selftest       # end-to-end engine test on a fake device (asks for password)

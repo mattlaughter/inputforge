@@ -13,6 +13,8 @@ KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinpu
 # deliberately NOT exposed over hidraw.
 #   Logitech G815 / G813 (wired): interface 1 = HID++ (usage page 0xFF43)
 SUBSYSTEM=="hidraw", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c33f|c232", ENV{ID_USB_INTERFACE_NUM}=="01", TAG+="uaccess"
+#   Logitech G915 TKL: wired (c343) or via its LIGHTSPEED receiver (c545), interface 2
+SUBSYSTEM=="hidraw", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c343|c545", ENV{ID_USB_INTERFACE_NUM}=="02", TAG+="uaccess"
 #   Logitech G600: interface 1 = config/LED (usage page 0xFF80)
 SUBSYSTEM=="hidraw", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c24a", ENV{ID_USB_INTERFACE_NUM}=="01", TAG+="uaccess"
 
