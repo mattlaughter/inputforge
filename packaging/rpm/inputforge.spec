@@ -7,7 +7,7 @@
 %bcond_with rustup
 
 Name:           inputforge
-Version:        0.3.0
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Keyboard and mouse remapping, macros, autoclicker and RGB lighting
 
@@ -58,6 +58,9 @@ fi
 %{_datadir}/icons/hicolor/*/apps/inputforge.*
 
 %changelog
+* Fri Oct 02 2026 Matt Laughter - 0.3.1-1
+- G915 TKL: recognise 046d:408e / receiver c547; find the paired slot behind a receiver
+
 * Fri Oct 02 2026 Matt Laughter - 0.3.0-1
 - Add Logitech G915 TKL lighting (wired and LIGHTSPEED receiver)
 

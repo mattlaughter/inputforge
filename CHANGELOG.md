@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 — 2026-10-02
+
+- G915 TKL over LIGHTSPEED: the keyboard reports itself as `046d:408e` (its receiver as `c545` or
+  `c547`), which 0.3.0 didn't recognise, so there was no Lighting page. Both are recognised now, and
+  behind a receiver InputForge finds the keyboard's paired slot itself instead of assuming slot 1.
+- `--lighting-info` now probes the keyboard (read-only) and prints which HID++ features it
+  answers for, per receiver slot.
+- Replies are matched to the slot they were sent to, so another HID++ program (Solaar) talking to
+  the same receiver can't be mistaken for our answers.
+- Known limitation, documented in the README: Per-key, Solid and effect modes take lighting
+  control from the keyboard's onboard profile, so its own idle-dim/sleep timers stop applying
+  until onboard mode is restored (e.g. by switching profile on the keyboard).
+
 ## 0.3.0 — 2026-10-02
 
 - **New: Logitech G915 TKL lighting** (wired `046d:c343`, or through its LIGHTSPEED receiver

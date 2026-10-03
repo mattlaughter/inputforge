@@ -83,6 +83,19 @@ cargo build --release
 sudo ./install.sh     # binary to /usr/local/bin, udev rules, icons, menu entry, adds you to 'input'
 ```
 
+## Logitech G915 TKL notes
+
+Works wired or over the LIGHTSPEED receiver (the keyboard shows up as `046d:408e`). It is untested
+by the author, so please report problems with the output of `inputforge --lighting-info`.
+
+- Setting lighting from InputForge takes control from the keyboard's **onboard profile**. While
+  it holds control, the keyboard's own idle dim and sleep timers (the ones Solaar or G HUB
+  configure) don't run. Switching the onboard profile on the keyboard hands control back.
+- InputForge doesn't read battery, switch hosts or change report rate. Keep Solaar for those; the
+  two can run together as long as only one of them is changing lighting at a time. InputForge writes
+  nothing to the keyboard until you change something on its Lighting page (or enable
+  *Apply lighting at launch*).
+
 ## Permissions (no `input` group)
 
 InputForge does **not** put you in the `input` group. That group lets every program you run read

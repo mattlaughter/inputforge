@@ -3,7 +3,8 @@
 //! Supported:
 //!   * Logitech G815 / G813 (wired, 046d:c33f / c232) — per-key direct colors, static,
 //!     breathing, color cycle. HID++ long reports (id 0x11) on the 0xFF43 interface.
-//!   * Logitech G915 TKL (wired 046d:c343, LIGHTSPEED receiver 046d:c545) — same HID++ 4522/8071/8081
+//!   * Logitech G915 TKL (wired 046d:c343, or through a LIGHTSPEED receiver 046d:c545 / c547; wirelessly the
+//!     keyboard itself shows up as 046d:408e) — same HID++ 4522/8071/8081
 //!     lighting features as the G815, but on the 0xFF00 interface 2 with feature indices that are
 //!     looked up at run time, and no numpad / G-keys. Untested on hardware by the author.
 //!   * Logitech G600 (046d:c24a) — static, breathing, cycle via feature report 0xF1.
@@ -24,6 +25,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub type Rgb = [u8; 3];
+
+/// Device index meaning "a receiver: find which paired slot holds the keyboard".
+const RECEIVER_AUTO: u8 = 0;
 
 // ───────────────────────────── settings ─────────────────────────────
 
@@ -169,7 +173,8 @@ impl Model {
         }
         match product {
             0xc33f | 0xc232 => Some(Model::G815),
-            0xc343 | 0xc545 => Some(Model::G915Tkl),
+            // wired, receivers (c545 / c547), and the keyboard as seen over a receiver (408e)
+            0xc343 | 0xc545 | 0xc547 | 0x408e => Some(Model::G915Tkl),
             0xc24a => Some(Model::G600),
             _ => None,
         }
@@ -179,7 +184,8 @@ impl Model {
 #[derive(Debug, Clone)]
 pub struct Found {
     pub model: Model,
-    /// HID++ device index: 0xFF for a wired keyboard, 1 behind a LIGHTSPEED receiver.
+    /// HID++ device index: 0xFF for a wired keyboard, or `RECEIVER_AUTO` behind a LIGHTSPEED
+    /// receiver (the paired slot is found when the device is opened).
     pub dev_index: u8,
     pub path: PathBuf,
     #[allow(dead_code)]
@@ -201,6 +207,9 @@ pub fn classify_hidraw(
     desc: &[u8],
 ) -> Option<(Model, u8)> {
     let model = Model::from_product(vendor, product)?;
+    if product == 0x408e {
+        return None; // the paired keyboard itself; we talk to it through its receiver
+    }
     match model {
         // Usage page 0xFF43 (HID++ for keyboards) => bytes 06 43 FF
         Model::G815 if has_bytes(desc, &[0x06, 0x43, 0xff]) => Some((model, 0xFF)),
@@ -212,7 +221,14 @@ pub fn classify_hidraw(
                 && has_bytes(desc, &[0x06, 0x00, 0xff])
                 && has_bytes(desc, &[0x85, 0x11]) =>
         {
-            Some((model, if product == 0xc343 { 0xFF } else { 0x01 }))
+            Some((
+                model,
+                if product == 0xc343 {
+                    0xFF
+                } else {
+                    RECEIVER_AUTO
+                },
+            ))
         }
         _ => None,
     }
@@ -611,6 +627,9 @@ impl Keyboard {
         };
         // Feature slots differ between models and firmware; ask the keyboard. If it can't
         // answer (G815 asleep, say), fall back to the G815's usual slots.
+        if k.index == RECEIVER_AUTO {
+            k.index = k.find_receiver_slot()?;
+        }
         match k.lookup_features() {
             Ok(f) => k.f = f,
             Err(e) if found.model == Model::G915Tkl => return Err(e),
@@ -623,9 +642,10 @@ impl Keyboard {
         hidpp(self.index, feature, func)
     }
 
-    /// HID++ 2.0 IRoot.GetFeature: where does feature `id` live on this device?
-    fn feature_index(&mut self, id: u16) -> Result<Option<u8>> {
-        let mut p = hidpp(self.index, 0x00, 0x0E);
+    /// HID++ 2.0 IRoot.GetFeature on slot `idx`: where does feature `id` live?
+    /// `Ok(None)` = the device answered but lacks the feature.
+    fn feature_index_at(&mut self, idx: u8, id: u16) -> Result<Option<u8>> {
+        let mut p = hidpp(idx, 0x00, 0x0E);
         p[4] = (id >> 8) as u8;
         p[5] = id as u8;
         self.dev.write(&p)?;
@@ -634,14 +654,45 @@ impl Keyboard {
             let Some(r) = self.dev.read_timeout(rem) else {
                 break;
             };
-            if r.len() >= 5 && r[0] == 0x11 && r[2] == 0x00 && r[3] == 0x0E {
+            // Only replies addressed to this slot (a second program, e.g. Solaar, may be talking too).
+            if r.len() < 5 || r[1] != idx {
+                continue;
+            }
+            if r[0] == 0x11 && r[2] == 0x00 && r[3] == 0x0E {
                 return Ok((r[4] != 0).then_some(r[4]));
             }
-            if r.len() >= 6 && r[0] == 0x11 && r[2] == 0xFF && r[3] == 0x00 {
-                bail!("keyboard returned HID++ error {:#04x} while probing", r[5]);
+            // HID++ 2.0 error [11 idx FF 00 0E code] or HID++ 1.0 error [10 idx 8F 00 0E code]
+            if (r[2] == 0xFF || r[2] == 0x8F) && r.len() >= 6 && r[3] == 0x00 {
+                bail!("HID++ error {:#04x} from slot {idx}", r[5]);
             }
         }
-        bail!("no answer from the keyboard (switched off, asleep or out of range?)")
+        bail!("no answer from slot {idx} (keyboard switched off, asleep or out of range?)")
+    }
+
+    fn feature_index(&mut self, id: u16) -> Result<Option<u8>> {
+        self.feature_index_at(self.index, id)
+    }
+
+    /// Behind a LIGHTSPEED receiver: which paired slot (1..=6) is a per-key-lit keyboard?
+    fn find_receiver_slot(&mut self) -> Result<u8> {
+        let mut seen = vec![];
+        for slot in 1..=6u8 {
+            match self.feature_index_at(slot, 0x8081) {
+                Ok(Some(_)) => return Ok(slot),
+                Ok(None) => seen.push(format!("slot {slot}: paired, no per-key lighting")),
+                Err(_) => {}
+            }
+        }
+        if seen.is_empty() {
+            bail!(
+                "the receiver has no keyboard answering (is the keyboard switched on and \
+connected by LIGHTSPEED, not Bluetooth?)"
+            )
+        }
+        bail!(
+            "no paired device with per-key lighting ({})",
+            seen.join("; ")
+        )
     }
 
     fn lookup_features(&mut self) -> Result<Features> {
@@ -876,6 +927,58 @@ fn worker(rx: Receiver<Job>, status: Arc<Mutex<String>>, repaint: impl Fn()) {
     }
 }
 
+/// Read-only HID++ probe for `--lighting-info` (IRoot.GetFeature only; changes nothing).
+fn probe_keyboard(node: &Path, idx: u8) -> String {
+    let found = Found {
+        model: Model::G915Tkl,
+        dev_index: idx,
+        path: node.to_path_buf(),
+        product: String::new(),
+        accessible: true,
+    };
+    let mut k = match Hidraw::open(&found.path) {
+        Ok(dev) => Keyboard {
+            dev,
+            model: found.model,
+            index: idx,
+            f: G815_FEATURES,
+            direct: false,
+            shown: vec![],
+        },
+        Err(e) => return format!("cannot open: {e}"),
+    };
+    let mut lines = vec![];
+    let slots: Vec<u8> = if idx == RECEIVER_AUTO {
+        (1..=6).collect()
+    } else {
+        vec![idx]
+    };
+    for slot in slots {
+        let mut feats = vec![];
+        let mut err = None;
+        for (name, id) in [("4522", 0x4522u16), ("8071", 0x8071), ("8081", 0x8081)] {
+            match k.feature_index_at(slot, id) {
+                Ok(Some(i)) => feats.push(format!("{name}@{i:#04x}")),
+                Ok(None) => feats.push(format!("{name}=missing")),
+                Err(e) => {
+                    err = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+        match err {
+            None => lines.push(format!("slot {slot:#04x}: {}", feats.join(" "))),
+            Some(e) if idx != RECEIVER_AUTO => lines.push(format!("slot {slot:#04x}: {e}")),
+            Some(_) => {} // empty receiver slots simply don't answer
+        }
+    }
+    if lines.is_empty() {
+        "no paired device answered".into()
+    } else {
+        lines.join(" | ")
+    }
+}
+
 /// Diagnostics for bug reports (`inputforge --lighting-info`): every Logitech hidraw node, how it
 /// was classified and whether this user can open it.
 pub fn describe_hidraw() -> Vec<String> {
@@ -921,6 +1024,10 @@ pub fn describe_hidraw() -> Vec<String> {
             .map(|b| format!("{b:02x}"))
             .collect::<Vec<_>>()
             .join(" ");
+        let probe = match classify_hidraw(id[1] as u16, id[2] as u16, iface, &desc) {
+            Some((Model::G915Tkl, idx)) if open => Some(probe_keyboard(&node, idx)),
+            _ => None,
+        };
         out.push(format!(
             "{} {:04x}:{:04x} iface={} {}  {}  descriptor[{}B]: {head}",
             node.display(),
@@ -931,6 +1038,9 @@ pub fn describe_hidraw() -> Vec<String> {
             class,
             desc.len(),
         ));
+        if let Some(p) = probe {
+            out.push(format!("    probe: {p}"));
+        }
     }
     if out.is_empty() {
         out.push("no Logitech hidraw devices found".into());
@@ -995,8 +1105,15 @@ mod tests {
         );
         assert_eq!(
             classify_hidraw(0x046d, 0xc545, Some(2), TKL_DESC),
-            Some((Model::G915Tkl, 0x01))
+            Some((Model::G915Tkl, RECEIVER_AUTO))
         );
+        assert_eq!(
+            classify_hidraw(0x046d, 0xc547, Some(2), TKL_DESC),
+            Some((Model::G915Tkl, RECEIVER_AUTO))
+        );
+        // the keyboard's own wireless id is for the UI only, never a hidraw lighting node
+        assert_eq!(classify_hidraw(0x046d, 0x408e, Some(2), TKL_DESC), None);
+        assert_eq!(Model::from_product(0x046d, 0x408e), Some(Model::G915Tkl));
         // the typing interface (no vendor HID++ descriptor) and other interfaces are not ours
         assert_eq!(classify_hidraw(0x046d, 0xc343, Some(1), TKL_DESC), None);
         assert_eq!(
