@@ -17,6 +17,8 @@ SUBSYSTEM=="hidraw", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c33f|c232", E
 SUBSYSTEM=="hidraw", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c343|c545|c547", ENV{ID_USB_INTERFACE_NUM}=="02", TAG+="uaccess"
 #   Logitech G600: interface 1 = config/LED (usage page 0xFF80)
 SUBSYSTEM=="hidraw", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c24a", ENV{ID_USB_INTERFACE_NUM}=="01", TAG+="uaccess"
+#   Razer Naga V2 HyperSpeed: interface 0 = control (DPI)
+SUBSYSTEM=="hidraw", ENV{ID_VENDOR_ID}=="1532", ENV{ID_MODEL_ID}=="00b4", ENV{ID_USB_INTERFACE_NUM}=="00", TAG+="uaccess"
 
 # Keyboards/mice the user turned on in InputForge get their own rules in
 # /etc/udev/rules.d/70-inputforge-devices.rules (written by `inputforge --udev-allow`).

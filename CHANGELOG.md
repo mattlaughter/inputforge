@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Wheel tilt (Razer Naga and anything else that sends `REL_HWHEEL` instead of a button) shows up in Assignments as Tilt left / Tilt right, and can be remapped. A held tilt repeats about every 20ms; one gesture is one press, not a burst of clicks, and it no longer also scrolls sideways.
+- Hardware DPI control (Razer Naga V2 HyperSpeed) in Sensitivity: a slider (100–30000 DPI, in 50 DPI steps) and quick-set buttons for 800/1600/3200. Setting is stored on the device and survives power-off. Native protocol via hidraw (no libratbag or OpenRazer daemon required).
 
 ## 0.3.1 — 2026-10-02
 

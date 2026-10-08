@@ -35,7 +35,8 @@ X11, and in games.
 - **Macros:** taps, key down/up, typed text (US QWERTY layout only), delays, mouse moves and scrolls. Each macro runs
   once per press, repeats while held, or loops until toggled off.
 - **Autoclicker:** any button or key, 0.5–100 clicks/s, an optional click limit and a hotkey.
-- **Sensitivity:** pointer and scroll speed per mouse, plus natural scrolling.
+- **Sensitivity:** pointer and scroll speed per mouse, plus natural scrolling. When a Razer Naga V2
+  HyperSpeed is present, a hardware DPI slider (100–30000, stored on the device) also appears.
 - **System tray.** Closing the window keeps everything running. Left-click the tray icon to
   open the window, middle-click to pause or resume, and use the menu to switch profiles or
   quit. You can also have it start at login.

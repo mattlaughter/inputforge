@@ -7,6 +7,7 @@ mod hardware;
 mod keys;
 mod lighting;
 mod output;
+mod razer;
 mod selftest;
 mod theme;
 mod tray;
