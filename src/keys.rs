@@ -43,6 +43,20 @@ pub fn is_mouse_button(k: KeyCode) -> bool {
     (0x110..=0x11f).contains(&k.code())
 }
 
+/// Synthetic triggers for a wheel tilt click. These are not evdev key codes:
+/// the hardware sends REL_HWHEEL (±1 per notch, repeating while held).
+pub const WHEEL_LEFT: &str = "WHEEL_LEFT";
+pub const WHEEL_RIGHT: &str = "WHEEL_RIGHT";
+
+/// Map a REL_HWHEEL sign to a tilt trigger. Negative is left, positive is right.
+pub fn wheel_trigger(value: i32) -> Option<&'static str> {
+    match value.signum() {
+        -1 => Some(WHEEL_LEFT),
+        1 => Some(WHEEL_RIGHT),
+        _ => None,
+    }
+}
+
 /// Map a character to (key, needs_shift) for a US QWERTY layout.
 pub fn char_to_key(c: char) -> Option<(KeyCode, bool)> {
     use KeyCode as K;
@@ -151,5 +165,12 @@ mod tests {
         let n = all_key_names();
         assert!(n.iter().any(|s| s == "KEY_CAPSLOCK"));
         assert!(n.iter().any(|s| s == "BTN_EXTRA"));
+    }
+
+    #[test]
+    fn wheel_tilt_sign() {
+        assert_eq!(wheel_trigger(-1), Some(WHEEL_LEFT));
+        assert_eq!(wheel_trigger(1), Some(WHEEL_RIGHT));
+        assert_eq!(wheel_trigger(0), None);
     }
 }

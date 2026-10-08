@@ -25,8 +25,9 @@ X11, and in games.
   for its **Lighting**, **Assignments** and **Sensitivity** pages.
 - **Assignments.** Every key or button the device has is listed with what it currently does.
   Click one to change it to another key, a shortcut (e.g. Ctrl+C), a macro, the autoclicker
-  toggle, or nothing. *Find by pressing* jumps to a key when you press it. Profiles let you keep
-  several sets of assignments.
+  toggle, or nothing. Wheel tilt (a repeating horizontal scroll, not a button) is listed as
+  Tilt left / Tilt right and can be remapped the same way. *Find by pressing* jumps to a key
+  or tilt when you press it. Profiles let you keep several sets of assignments.
 - **Built-in RGB lighting** for the Logitech G815/G813 and G915 TKL (wired or LIGHTSPEED receiver;
   the TKL is new and untested on hardware: per-key painting, solid, breathing,
   rainbow) and G600 (solid, breathing, rainbow). No OpenRGB or other tools are needed. The

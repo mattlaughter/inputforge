@@ -97,9 +97,14 @@ pub fn run() -> anyhow::Result<bool> {
     ]
     .into_iter()
     .collect();
-    let axes: AttributeSet<RelativeAxisCode> = [RelativeAxisCode::REL_X, RelativeAxisCode::REL_Y]
-        .into_iter()
-        .collect();
+    let axes: AttributeSet<RelativeAxisCode> = [
+        RelativeAxisCode::REL_X,
+        RelativeAxisCode::REL_Y,
+        RelativeAxisCode::REL_HWHEEL,
+        RelativeAxisCode::REL_HWHEEL_HI_RES,
+    ]
+    .into_iter()
+    .collect();
     let mut src = VirtualDevice::builder()?
         .name(SRC_NAME)
         .with_keys(&keys)?
@@ -167,6 +172,13 @@ pub fn run() -> anyhow::Result<bool> {
                 Rule {
                     trigger: "KEY_F19".into(),
                     action: Action::Disabled,
+                    ..Default::default()
+                },
+                Rule {
+                    trigger: "WHEEL_LEFT".into(),
+                    action: Action::Key {
+                        key: "KEY_F21".into(),
+                    },
                     ..Default::default()
                 },
             ],
@@ -280,6 +292,61 @@ pub fn run() -> anyhow::Result<bool> {
     all &= check(
         "extra mouse button 0x118 passes through",
         got == [(0x118, 1), (0x118, 0)],
+        &got,
+    );
+
+    // A tilt click is a burst of REL_HWHEEL, not a button. One gesture → one press.
+    for _ in 0..4 {
+        src.emit(&[
+            InputEvent::new(EventType::RELATIVE.0, RelativeAxisCode::REL_HWHEEL.0, -1),
+            InputEvent::new(
+                EventType::RELATIVE.0,
+                RelativeAxisCode::REL_HWHEEL_HI_RES.0,
+                -120,
+            ),
+        ])?;
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    let got = keys_of(&drain(&mut vk, Duration::from_millis(40)));
+    all &= check(
+        "tilt left burst → one F21 down",
+        got == [("KEY_F21".into(), 1)],
+        &got,
+    );
+    let scrolled: Vec<(u16, i32)> = drain(&mut vp, Duration::from_millis(30))
+        .iter()
+        .filter(|e| e.event_type() == EventType::RELATIVE && (e.code() == 6 || e.code() == 12))
+        .map(|e| (e.code(), e.value()))
+        .collect();
+    all &= check(
+        "tilt left does not also scroll",
+        scrolled.is_empty(),
+        &scrolled,
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    let got = keys_of(&drain(&mut vk, Duration::from_millis(80)));
+    all &= check(
+        "tilt left releases after the burst",
+        got == [("KEY_F21".into(), 0)],
+        &got,
+    );
+
+    src.emit(&[
+        InputEvent::new(EventType::RELATIVE.0, RelativeAxisCode::REL_HWHEEL.0, 1),
+        InputEvent::new(
+            EventType::RELATIVE.0,
+            RelativeAxisCode::REL_HWHEEL_HI_RES.0,
+            120,
+        ),
+    ])?;
+    let got: Vec<(u16, i32)> = drain(&mut vp, Duration::from_millis(150))
+        .iter()
+        .filter(|e| e.event_type() == EventType::RELATIVE)
+        .map(|e| (e.code(), e.value()))
+        .collect();
+    all &= check(
+        "unbound tilt right still scrolls",
+        got.iter().any(|e| *e == (6, 1)) && got.iter().any(|e| *e == (12, 120)),
         &got,
     );
 

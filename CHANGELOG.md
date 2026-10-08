@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Wheel tilt (Razer Naga and anything else that sends `REL_HWHEEL` instead of a button) shows up in Assignments as Tilt left / Tilt right, and can be remapped. A held tilt repeats about every 20ms; one gesture is one press, not a burst of clicks, and it no longer also scrolls sideways.
+
 ## 0.3.1 — 2026-10-02
 
 - G915 TKL over LIGHTSPEED: the keyboard reports itself as `046d:408e` (its receiver as `c545` or

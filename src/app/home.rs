@@ -146,6 +146,8 @@ pub fn pretty_key(k: &str) -> String {
         "KEY_KPDOT" => "Numpad .",
         "KEY_KPENTER" => "Numpad Enter",
         "BTN_TASK" => "Task button",
+        "WHEEL_LEFT" => "Tilt left",
+        "WHEEL_RIGHT" => "Tilt right",
         "" => "—",
         _ => "",
     };
@@ -799,13 +801,13 @@ impl App {
             if ui
                 .add(
                     egui::Button::new(if finding {
-                        "Press a key on the device…"
+                        "Press a key or tilt the wheel…"
                     } else {
                         "🎯 Find by pressing"
                     })
                     .selected(finding),
                 )
-                .on_hover_text("Press a key or button and jump to it in the list")
+                .on_hover_text("Press a key, button, or tilt the wheel and jump to it in the list")
                 .clicked()
             {
                 self.begin_capture(CaptureTarget::FindKey);
@@ -1299,6 +1301,19 @@ fn key_sections(d: &PhysDevice) -> Vec<(&'static str, Vec<String>)> {
             "Buttons",
             pick(&[0x110, 0x111, 0x112, 0x113, 0x114, 0x115, 0x116, 0x117]),
         ));
+        // Tilt is not a button: the Naga (and most tilt wheels) send REL_HWHEEL.
+        if d.nodes
+            .iter()
+            .any(|n| n.rel.iter().any(|c| *c == 6 || *c == 12))
+        {
+            out.push((
+                "Scroll wheel",
+                vec![
+                    crate::keys::WHEEL_LEFT.to_string(),
+                    crate::keys::WHEEL_RIGHT.to_string(),
+                ],
+            ));
+        }
         out.push((
             "Side buttons",
             pick(&[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
@@ -1352,5 +1367,7 @@ mod tests {
         assert_eq!(pretty_key("KEY_SCROLLLOCK"), "Scroll Lock");
         assert_eq!(pretty_key("KEY_KP7"), "Numpad 7");
         assert_eq!(pretty_key("KEY_PLAYPAUSE"), "Play / Pause");
+        assert_eq!(pretty_key("WHEEL_LEFT"), "Tilt left");
+        assert_eq!(pretty_key("WHEEL_RIGHT"), "Tilt right");
     }
 }

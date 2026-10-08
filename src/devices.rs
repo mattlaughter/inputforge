@@ -50,6 +50,8 @@ pub struct DeviceInfo {
     pub product: u16,
     /// Supported EV_KEY codes (keys and buttons).
     pub keys: Vec<u16>,
+    /// Supported EV_REL codes (pointer and wheel axes).
+    pub rel: Vec<u16>,
     /// Whether this user can open the node. Devices are listed from sysfs
     /// either way, so they can be shown and access requested per device.
     pub accessible: bool,
@@ -136,6 +138,7 @@ fn from_sysfs(path: &std::path::Path) -> Option<DeviceInfo> {
         vendor: hex("id/vendor"),
         product: hex("id/product"),
         keys,
+        rel,
         accessible: false,
     })
 }
@@ -203,6 +206,10 @@ pub fn scan() -> ScanResult {
                     keys: dev
                         .supported_keys()
                         .map(|k| k.iter().map(|c| c.code()).collect())
+                        .unwrap_or_default(),
+                    rel: dev
+                        .supported_relative_axes()
+                        .map(|r| r.iter().map(|a| a.0).collect())
                         .unwrap_or_default(),
                     accessible: true,
                 })
@@ -474,6 +481,7 @@ mod group_tests {
             vendor: v,
             product: p,
             keys: vec![],
+            rel: vec![],
             accessible: true,
         }
     }

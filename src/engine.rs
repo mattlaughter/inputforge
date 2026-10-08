@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{Action, Config, DeviceSettings, Macro, MacroMode, Step};
 use crate::devices::{self, VIRTUAL_PREFIX};
-use crate::keys::{char_to_key, key_name, parse_key};
+use crate::keys::{WHEEL_LEFT, char_to_key, key_name, parse_key, wheel_trigger};
 use crate::output::Output;
 
 const LOG_CAP: usize = 200;
@@ -24,7 +24,7 @@ pub struct Shared {
     pub log: VecDeque<String>,
     pub status: String,
     pub grabbed: Vec<String>,
-    /// When set, the next key press is captured here instead of being processed.
+    /// When set, the next key press or wheel tilt is captured here instead of being processed.
     pub capture_request: bool,
     pub captured: Option<String>,
     pub running: bool,
@@ -158,12 +158,111 @@ struct Source {
     acc_hwheel: f32,
     acc_hwheel_hr: f32,
     physically_held: HashSet<KeyCode>,
+    tilt: TiltGesture,
 }
 
 /// Per-trigger runtime state for macros.
 struct MacroRun {
     cancel: Arc<AtomicBool>,
     handle: JoinHandle<()>,
+}
+
+/// The Naga repeats REL_HWHEEL every 20ms for as long as the tilt is held.
+/// Quiet longer than this and the synthetic button is released.
+const TILT_GAP: Duration = Duration::from_millis(80);
+
+struct TiltGesture {
+    /// -1 left, 1 right, 0 idle.
+    dir: i32,
+    last: Instant,
+    /// Swallowed by the "press a key" capture. Repeats must not fire the binding.
+    captured: bool,
+}
+
+enum TiltStep {
+    None,
+    Down(&'static str),
+    Up(&'static str),
+    UpDown {
+        up: &'static str,
+        down: &'static str,
+    },
+}
+
+impl TiltGesture {
+    fn new() -> Self {
+        Self {
+            dir: 0,
+            last: Instant::now(),
+            captured: false,
+        }
+    }
+
+    fn name(sign: i32) -> &'static str {
+        if sign < 0 {
+            WHEEL_LEFT
+        } else {
+            crate::keys::WHEEL_RIGHT
+        }
+    }
+
+    /// `bound` — this direction has a remap. `capture` — the GUI wants the next input.
+    fn notch(&mut self, sign: i32, now: Instant, bound: bool, capture: bool) -> TiltStep {
+        if sign == 0 {
+            return TiltStep::None;
+        }
+        if self.dir == sign {
+            self.last = now;
+            return TiltStep::None;
+        }
+        let prev = self.dir;
+        let prev_captured = self.captured;
+        let release_prev = prev != 0 && !prev_captured;
+        if !bound && !capture {
+            self.dir = 0;
+            self.captured = false;
+            self.last = now;
+            return if release_prev {
+                TiltStep::Up(Self::name(prev))
+            } else {
+                TiltStep::None
+            };
+        }
+        self.dir = sign;
+        self.last = now;
+        self.captured = capture;
+        if capture {
+            return if release_prev {
+                TiltStep::Up(Self::name(prev))
+            } else {
+                TiltStep::None
+            };
+        }
+        if prev == 0 || prev_captured {
+            TiltStep::Down(Self::name(sign))
+        } else {
+            TiltStep::UpDown {
+                up: Self::name(prev),
+                down: Self::name(sign),
+            }
+        }
+    }
+
+    fn tick(&mut self, now: Instant) -> TiltStep {
+        if self.dir != 0 && now.duration_since(self.last) > TILT_GAP {
+            let prev = self.dir;
+            let captured = self.captured;
+            self.dir = 0;
+            self.captured = false;
+            if captured {
+                TiltStep::None
+            } else {
+                TiltStep::Up(Self::name(prev))
+            }
+        } else {
+            TiltStep::None
+        }
+    }
 }
 
 fn run(ctx: Ctx) {
@@ -194,6 +293,10 @@ fn run(ctx: Ctx) {
             }
             Ok(Msg::Gone { dev, err }) => {
                 if let Some(s) = sources.get_mut(dev) {
+                    let name = s.settings.name.to_lowercase();
+                    if let TiltStep::Up(t) = s.tilt.tick(Instant::now() + TILT_GAP + TILT_GAP) {
+                        apply_trigger(&ctx, dev, &name, t, 0, &mut macros);
+                    }
                     s.alive = false;
                     s.physically_held.clear();
                     ctx.log(format!("Device disconnected: {} ({err})", s.settings.name));
@@ -202,6 +305,7 @@ fn run(ctx: Ctx) {
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
+        release_tilts(&ctx, &mut sources, &mut macros);
         // Reap finished macros.
         macros.retain(|_, m| !m.handle.is_finished());
         // Hot-plug: a full scan opens every input device (~100+ ms) and this
@@ -317,6 +421,7 @@ fn attach_devices(
             acc_hwheel: 0.0,
             acc_hwheel_hr: 0.0,
             physically_held: HashSet::new(),
+            tilt: TiltGesture::new(),
         });
         let label = format!("{} ({})", info.name, info.path.display());
         ctx.shared.lock().unwrap().grabbed.push(label.clone());
@@ -411,6 +516,146 @@ fn emergency_chord(sources: &[Source], key: KeyCode) -> bool {
         && sources
             .iter()
             .any(|s| s.physically_held.contains(&KeyCode::KEY_RIGHTCTRL))
+}
+
+fn matching_rule<'a>(
+    cfg: &'a Config,
+    dev_name: &str,
+    trigger: &str,
+) -> Option<&'a crate::config::Rule> {
+    let hit = |r: &&crate::config::Rule| r.enabled && r.trigger == trigger;
+    cfg.active_rules()
+        .iter()
+        .filter(hit)
+        .find(|r| !r.device_filter.is_empty() && dev_name.contains(&r.device_filter.to_lowercase()))
+        .or_else(|| {
+            cfg.active_rules()
+                .iter()
+                .filter(hit)
+                .find(|r| r.device_filter.is_empty())
+        })
+}
+
+fn tilt_slot(trigger: &str) -> KeyCode {
+    KeyCode::new(if trigger == WHEEL_LEFT { 0x2fe } else { 0x2ff })
+}
+
+fn emit_tilt(
+    ctx: &Ctx,
+    dev: usize,
+    dev_name: &str,
+    step: TiltStep,
+    macros: &mut HashMap<(usize, KeyCode), MacroRun>,
+) {
+    match step {
+        TiltStep::None => {}
+        TiltStep::Down(t) => apply_trigger(ctx, dev, dev_name, t, 1, macros),
+        TiltStep::Up(t) => apply_trigger(ctx, dev, dev_name, t, 0, macros),
+        TiltStep::UpDown { up, down } => {
+            apply_trigger(ctx, dev, dev_name, up, 0, macros);
+            apply_trigger(ctx, dev, dev_name, down, 1, macros);
+        }
+    }
+}
+
+fn release_tilts(
+    ctx: &Ctx,
+    sources: &mut [Source],
+    macros: &mut HashMap<(usize, KeyCode), MacroRun>,
+) {
+    let now = Instant::now();
+    for (dev, src) in sources.iter_mut().enumerate() {
+        if let TiltStep::Up(t) = src.tilt.tick(now) {
+            let name = src.settings.name.to_lowercase();
+            apply_trigger(ctx, dev, &name, t, 0, macros);
+        }
+    }
+}
+
+/// Apply a named trigger (a key name or WHEEL_LEFT / WHEEL_RIGHT) as a press or release.
+fn apply_trigger(
+    ctx: &Ctx,
+    dev: usize,
+    dev_name: &str,
+    trigger: &str,
+    value: i32,
+    macros: &mut HashMap<(usize, KeyCode), MacroRun>,
+) {
+    let cfg = ctx.config.read().unwrap().clone();
+    let Some(rule) = matching_rule(&cfg, dev_name, trigger) else {
+        return;
+    };
+    match &rule.action {
+        Action::Key { key } => {
+            if let Some(t) = parse_key(key) {
+                let _ = ctx.out.lock().unwrap().key(t, value);
+            }
+        }
+        Action::Combo { keys } => {
+            let ks: Vec<KeyCode> = keys.iter().filter_map(|k| parse_key(k)).collect();
+            let mut out = ctx.out.lock().unwrap();
+            match value {
+                1 => {
+                    for k in &ks {
+                        let _ = out.key(*k, 1);
+                    }
+                }
+                0 => {
+                    for k in ks.iter().rev() {
+                        let _ = out.key(*k, 0);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Action::Disabled => {}
+        Action::ToggleAutoclicker => {
+            if value == 1 {
+                let on = !ctx.autoclick.active.load(Ordering::SeqCst);
+                set_autoclick(&ctx.autoclick, &ctx.config, &ctx.out, on);
+                ctx.log(format!("Autoclicker {}", if on { "ON" } else { "OFF" }));
+            }
+        }
+        Action::Macro { name } => {
+            let Some(m) = cfg.find_macro(name).cloned() else {
+                if value == 1 {
+                    ctx.log(format!("Macro '{name}' not found"));
+                }
+                return;
+            };
+            let slot = (dev, tilt_slot(trigger));
+            let running = macros.get(&slot).is_some_and(|r| !r.handle.is_finished());
+            match (m.mode, value) {
+                (MacroMode::Once, 1) => {
+                    if !running {
+                        macros.insert(slot, spawn_macro(ctx, m, false));
+                    }
+                }
+                (MacroMode::WhileHeld, 1) => {
+                    if !running {
+                        macros.insert(slot, spawn_macro(ctx, m, true));
+                    }
+                }
+                (MacroMode::WhileHeld, 0) => {
+                    if let Some(r) = macros.get(&slot) {
+                        r.cancel.store(true, Ordering::SeqCst);
+                    }
+                }
+                (MacroMode::Toggle, 1) => {
+                    if running {
+                        if let Some(r) = macros.get(&slot) {
+                            r.cancel.store(true, Ordering::SeqCst);
+                        }
+                        ctx.log(format!("Macro '{}' stopped", m.name));
+                    } else {
+                        ctx.log(format!("Macro '{}' looping", m.name));
+                        macros.insert(slot, spawn_macro(ctx, m, true));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Returns Some(true) when the emergency-stop chord was pressed.
@@ -564,6 +809,43 @@ fn handle_batch(
                 }
             }
             EventSummary::RelativeAxis(_, axis, value) => {
+                if axis == RelativeAxisCode::REL_HWHEEL
+                    || axis == RelativeAxisCode::REL_HWHEEL_HI_RES
+                {
+                    let sign = value.signum();
+                    let dev_name = src.settings.name.to_lowercase();
+                    let trigger = wheel_trigger(value);
+                    let bound =
+                        trigger.is_some_and(|t| matching_rule(&cfg, &dev_name, t).is_some());
+                    let capturing = ctx.shared.lock().unwrap().capture_request;
+                    if axis == RelativeAxisCode::REL_HWHEEL_HI_RES {
+                        // Drop the high-res twin of a consumed tilt, or the page also scrolls.
+                        if bound || capturing || (sign != 0 && src.tilt.dir == sign) {
+                            continue;
+                        }
+                    } else if sign != 0 && (bound || capturing || src.tilt.dir != 0) {
+                        let now = Instant::now();
+                        if capturing {
+                            let step = src.tilt.notch(sign, now, true, true);
+                            let name = src.settings.name.to_lowercase();
+                            emit_tilt(ctx, dev, &name, step, macros);
+                            if let Some(t) = trigger {
+                                let mut sh = ctx.shared.lock().unwrap();
+                                sh.capture_request = false;
+                                sh.captured = Some(t.to_string());
+                                drop(sh);
+                                (ctx.repaint)();
+                            }
+                            continue;
+                        }
+                        let step = src.tilt.notch(sign, now, bound, false);
+                        let name = src.settings.name.to_lowercase();
+                        emit_tilt(ctx, dev, &name, step, macros);
+                        if bound {
+                            continue;
+                        }
+                    }
+                }
                 let s = &src.settings;
                 let pointer = s.pointer_speed.clamp(0.1, 5.0);
                 let scroll = s.scroll_speed.clamp(0.25, 5.0);
@@ -768,6 +1050,14 @@ pub fn capture_once(timeout: Duration) -> Option<String> {
                         let _ = tx.send(key_name(k));
                         return;
                     }
+                    if let EventSummary::RelativeAxis(_, RelativeAxisCode::REL_HWHEEL, v) =
+                        ev.destructure()
+                    {
+                        if let Some(t) = wheel_trigger(v) {
+                            let _ = tx.send(t.to_string());
+                            return;
+                        }
+                    }
                 }
             }
         }));
@@ -808,6 +1098,7 @@ mod tests {
             acc_hwheel: 0.0,
             acc_hwheel_hr: 0.0,
             physically_held: held.iter().copied().collect(),
+            tilt: TiltGesture::new(),
         }
     }
 
@@ -840,5 +1131,62 @@ mod tests {
         let mut acc = 0.0;
         assert_eq!(scale(&mut acc, 1, 0.5), 0);
         assert_eq!(scale(&mut acc, 1, 0.5), 1);
+    }
+
+    #[test]
+    fn tilt_click_is_one_press_despite_repeat() {
+        let mut g = TiltGesture::new();
+        let t0 = Instant::now();
+        assert!(matches!(
+            g.notch(-1, t0, true, false),
+            TiltStep::Down(WHEEL_LEFT)
+        ));
+        assert!(matches!(
+            g.notch(-1, t0 + Duration::from_millis(20), true, false),
+            TiltStep::None
+        ));
+        assert!(matches!(
+            g.notch(-1, t0 + Duration::from_millis(40), true, false),
+            TiltStep::None
+        ));
+        assert!(matches!(
+            g.tick(t0 + Duration::from_millis(100)),
+            TiltStep::None
+        ));
+        assert!(matches!(
+            g.tick(t0 + Duration::from_millis(40) + TILT_GAP + Duration::from_millis(1)),
+            TiltStep::Up(WHEEL_LEFT)
+        ));
+        assert_eq!(g.dir, 0);
+    }
+
+    #[test]
+    fn tilt_capture_swallows_repeats() {
+        let mut g = TiltGesture::new();
+        let t0 = Instant::now();
+        assert!(matches!(g.notch(1, t0, true, true), TiltStep::None));
+        assert!(g.captured);
+        assert!(matches!(
+            g.notch(1, t0 + Duration::from_millis(20), true, false),
+            TiltStep::None
+        ));
+        assert!(matches!(
+            g.tick(t0 + Duration::from_millis(20) + TILT_GAP + Duration::from_millis(1)),
+            TiltStep::None
+        ));
+    }
+
+    #[test]
+    fn tilt_switches_direction() {
+        let mut g = TiltGesture::new();
+        let t0 = Instant::now();
+        let _ = g.notch(-1, t0, true, false);
+        assert!(matches!(
+            g.notch(1, t0 + Duration::from_millis(20), true, false),
+            TiltStep::UpDown {
+                up: WHEEL_LEFT,
+                down: crate::keys::WHEEL_RIGHT
+            }
+        ));
     }
 }
