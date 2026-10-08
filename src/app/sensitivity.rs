@@ -76,51 +76,56 @@ impl App {
             ui.label(RichText::new("Hardware DPI").strong());
             ui.add_space(4.0);
 
+            if self.naga_dpi.is_none() && self.naga_dpi_status.is_empty() {
+                self.read_naga_dpi();
+            }
             let mut hw_dpi = self.naga_dpi.unwrap_or(1600);
-            let mut dpi_changed = false;
+            let mut apply = false;
 
             ui.horizontal(|ui| {
-                ui.label("DPI:");
-                dpi_changed = ui
-                    .add(
-                        egui::Slider::new(&mut hw_dpi, 100..=30000)
-                            .step_by(50.0)
-                            .suffix(" DPI"),
+                let r = ui.add_enabled(
+                    self.naga_dpi.is_some(),
+                    egui::Slider::new(&mut hw_dpi, razer::DPI_MIN..=razer::DPI_MAX)
+                        .step_by(50.0)
+                        .suffix(" DPI"),
+                );
+                // Each write is a USB round trip; send once when the drag ends.
+                apply |= r.drag_stopped() || (r.changed() && !r.dragged());
+                for v in [800, 1600, 3200] {
+                    if ui
+                        .add_enabled(self.naga_dpi.is_some(), egui::Button::new(v.to_string()))
+                        .clicked()
+                    {
+                        hw_dpi = v;
+                        apply = true;
+                    }
+                }
+                if ui
+                    .button("⟳")
+                    .on_hover_text(
+                        "Read the DPI from the mouse again (e.g. after using its DPI buttons)",
                     )
-                    .changed();
-
-                if ui.button("800").clicked() {
-                    hw_dpi = 800;
-                    dpi_changed = true;
-                }
-                if ui.button("1600").clicked() {
-                    hw_dpi = 1600;
-                    dpi_changed = true;
-                }
-                if ui.button("3200").clicked() {
-                    hw_dpi = 3200;
-                    dpi_changed = true;
+                    .clicked()
+                {
+                    self.read_naga_dpi();
                 }
             });
-
-            if dpi_changed {
+            if self.naga_dpi.is_some() {
                 self.naga_dpi = Some(hw_dpi);
-                match razer::set_naga_v2_hyperspeed_dpi(hw_dpi) {
-                    Ok(()) => {
-                        self.rb_status = format!("DPI set to {hw_dpi}");
+            }
+
+            if apply {
+                match razer::set_naga_dpi(hw_dpi) {
+                    Ok(now) => {
+                        self.naga_dpi = Some(now);
+                        self.naga_dpi_status = format!("Mouse reports {now} DPI");
                     }
-                    Err(e) => {
-                        self.rb_status = format!("DPI error: {e}");
-                    }
+                    Err(e) => self.naga_dpi_status = format!("Could not set DPI: {e:#}"),
                 }
             }
 
             ui.add_space(4.0);
-            ui.label(
-                RichText::new("Stored on the device; survives power-off.")
-                    .color(c.muted)
-                    .small(),
-            );
+            ui.label(RichText::new(&self.naga_dpi_status).color(c.muted).small());
         } else {
             ui.label(
                 RichText::new(
@@ -129,6 +134,19 @@ impl App {
                 .color(c.muted)
                 .small(),
             );
+        }
+    }
+
+    fn read_naga_dpi(&mut self) {
+        match razer::naga_dpi() {
+            Ok(v) => {
+                self.naga_dpi = Some(v);
+                self.naga_dpi_status = format!("Mouse reports {v} DPI");
+            }
+            Err(e) => {
+                self.naga_dpi = None;
+                self.naga_dpi_status = format!("Could not read DPI: {e:#}");
+            }
         }
     }
 }

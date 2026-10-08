@@ -1,147 +1,128 @@
-//! Razer mouse hardware settings over hidraw (DPI). Protocol from OpenRazer GPL drivers.
+//! Razer mouse hardware settings over hidraw (DPI).
 //!
-//! Supported:
-//!   * Razer Naga V2 HyperSpeed (1532:00B4) — DPI 100..30000 via razer_report.
+//! Supported: Razer Naga V2 HyperSpeed (receiver, 1532:00B4).
+//!
+//! Protocol follows OpenRazer's GPL driver (razercommon.c / razerchromacommon.c): a 90-byte
+//! report sent as a HID *feature* report (USB SET_REPORT, type feature, report id 0) and the
+//! answer read back with GET_REPORT. A plain `write()` sends an output report, which the mouse
+//! silently ignores. The receiver uses transaction id 0x1F.
 
 use anyhow::{Context, Result, bail};
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs::{File, OpenOptions};
+use std::os::fd::AsRawFd;
+use std::time::Duration;
 
 const RAZER_VENDOR: u16 = 0x1532;
 const NAGA_V2_HYPERSPEED: u16 = 0x00B4;
+const TRANSACTION_ID: u8 = 0x1F;
+const VARSTORE: u8 = 0x01;
+pub const DPI_MIN: u16 = 100;
+pub const DPI_MAX: u16 = 30000;
 
-/// 90-byte Razer USB report (struct razer_report from openrazer).
-#[repr(C, packed)]
-struct RazerReport {
-    status: u8,
-    transaction_id: u8,
-    remaining_packets: u16, // big-endian
-    protocol_type: u8,
-    data_size: u8,
-    command_class: u8,
-    command_id: u8,
-    arguments: [u8; 80],
-    crc: u8,
-    reserved: u8,
-}
+const REPORT_LEN: usize = 90;
+/// Status byte in a reply.
+const STATUS_BUSY: u8 = 0x01;
+const STATUS_OK: u8 = 0x02;
 
-impl RazerReport {
-    fn new(command_class: u8, command_id: u8, data_size: u8) -> Self {
-        Self {
-            status: 0,
-            transaction_id: 0,
-            remaining_packets: 0,
-            protocol_type: 0,
-            data_size,
-            command_class,
-            command_id,
-            arguments: [0; 80],
-            crc: 0,
-            reserved: 0,
-        }
-    }
-
-    fn calculate_crc(&self) -> u8 {
-        let bytes = unsafe {
-            std::slice::from_raw_parts(self as *const _ as *const u8, std::mem::size_of::<Self>())
-        };
-        // XOR bytes 2..88 (skip status, transaction_id; stop before crc, reserved).
-        bytes[2..88].iter().fold(0u8, |acc, &b| acc ^ b)
-    }
-
-    fn finalize(&mut self) {
-        self.crc = self.calculate_crc();
-    }
-
-    fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(self as *const _ as *const u8, std::mem::size_of::<Self>())
-        }
-    }
-}
-
-/// Build a set_dpi_xy command (class 0x04, id 0x05).
-fn set_dpi_xy_report(dpi_x: u16, dpi_y: u16) -> RazerReport {
-    let dpi_x = dpi_x.clamp(100, 30000);
-    let dpi_y = dpi_y.clamp(100, 30000);
-    let mut r = RazerReport::new(0x04, 0x05, 0x07);
-    // args[0] = varstore (NOSTORE=0 for Naga V2 HyperSpeed per openrazer).
-    r.arguments[0] = 0x00;
-    // args[1..5] = DPI X/Y as big-endian u16.
-    r.arguments[1] = (dpi_x >> 8) as u8;
-    r.arguments[2] = (dpi_x & 0xFF) as u8;
-    r.arguments[3] = (dpi_y >> 8) as u8;
-    r.arguments[4] = (dpi_y & 0xFF) as u8;
-    r.arguments[5] = 0;
-    r.arguments[6] = 0;
-    r.finalize();
+/// Build a report: [status, tid, remaining(2), proto, size, class, cmd, args[80], crc, 0].
+fn report(class: u8, cmd: u8, size: u8, args: &[u8]) -> [u8; REPORT_LEN] {
+    let mut r = [0u8; REPORT_LEN];
+    r[1] = TRANSACTION_ID;
+    r[5] = size;
+    r[6] = class;
+    r[7] = cmd;
+    r[8..8 + args.len()].copy_from_slice(args);
+    r[88] = r[2..88].iter().fold(0, |a, b| a ^ b);
     r
 }
 
-/// Find the control hidraw node for a Razer device (interface 0, or the first if none match).
-fn find_razer_hidraw(vendor: u16, product: u16) -> Result<String> {
-    let rd = std::fs::read_dir("/sys/class/hidraw")
-        .context("cannot read /sys/class/hidraw (hidraw kernel module not loaded?)")?;
-    let mut candidates = vec![];
-    for e in rd.flatten() {
-        let uevent = e.path().join("device/uevent");
-        let Ok(s) = std::fs::read_to_string(&uevent) else {
-            continue;
-        };
-        let mut id = [0u16; 3];
-        let mut iface = None;
-        for line in s.lines() {
-            if let Some(val) = line.strip_prefix("HID_ID=") {
-                let parts: Vec<_> = val.split(':').collect();
-                if parts.len() == 3 {
-                    id[1] = u16::from_str_radix(parts[1], 16).unwrap_or(0);
-                    id[2] = u16::from_str_radix(parts[2], 16).unwrap_or(0);
-                }
-            }
-            if let Some(val) = line.strip_prefix("HID_PHYS=") {
-                // usb-0000:0d:00.0-2/input0 → interface 0
-                if let Some(last) = val.split('/').last() {
-                    if let Some(n) = last.strip_prefix("input") {
-                        iface = n.parse::<u8>().ok();
-                    }
-                }
-            }
-        }
-        if id[1] == vendor && id[2] == product {
-            let name = e.file_name().into_string().unwrap();
-            candidates.push((name, iface));
-        }
-    }
-    if candidates.is_empty() {
-        bail!("Razer device {vendor:04x}:{product:04x} not found on hidraw");
-    }
-    // Prefer interface 0 (the control interface), else the first.
-    let chosen = candidates
-        .iter()
-        .find(|(_, i)| *i == Some(0))
-        .or_else(|| candidates.first())
-        .unwrap();
-    Ok(format!("/dev/{}", chosen.0))
+fn set_dpi_report(dpi: u16) -> [u8; REPORT_LEN] {
+    let [hi, lo] = dpi.clamp(DPI_MIN, DPI_MAX).to_be_bytes();
+    report(0x04, 0x05, 0x07, &[VARSTORE, hi, lo, hi, lo, 0, 0])
 }
 
-/// Set DPI on a Razer Naga V2 HyperSpeed.
-pub fn set_naga_v2_hyperspeed_dpi(dpi: u16) -> Result<()> {
-    let path = find_razer_hidraw(RAZER_VENDOR, NAGA_V2_HYPERSPEED)?;
-    let report = set_dpi_xy_report(dpi, dpi);
-    let mut f = OpenOptions::new()
-        .write(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(&path)
-        .with_context(|| format!("cannot open {path} (needs uaccess udev rule)"))?;
-    f.write_all(report.as_bytes())
-        .context("write razer_report failed")?;
+fn get_dpi_report() -> [u8; REPORT_LEN] {
+    report(0x04, 0x85, 0x07, &[VARSTORE])
+}
+
+/// `_IOC(_IOC_READ|_IOC_WRITE, 'H', nr, len)`
+fn hid_ioc(nr: u64, len: usize) -> u64 {
+    (3 << 30) | ((len as u64) << 16) | ((b'H' as u64) << 8) | nr
+}
+
+fn feature(f: &File, nr: u64, buf: &mut [u8]) -> Result<()> {
+    let r = unsafe { libc::ioctl(f.as_raw_fd(), hid_ioc(nr, buf.len()) as _, buf.as_mut_ptr()) };
+    if r < 0 {
+        bail!("{}", std::io::Error::last_os_error());
+    }
     Ok(())
 }
 
-/// Diagnostic: check if the Naga V2 HyperSpeed is present.
-pub fn naga_v2_hyperspeed_present() -> bool {
-    find_razer_hidraw(RAZER_VENDOR, NAGA_V2_HYPERSPEED).is_ok()
+/// Send a report and return the reply (90 bytes, without the report id).
+fn transfer(f: &File, req: &[u8; REPORT_LEN]) -> Result<[u8; REPORT_LEN]> {
+    let mut buf = [0u8; REPORT_LEN + 1]; // byte 0 = report id 0
+    buf[1..].copy_from_slice(req);
+    feature(f, 0x06, &mut buf).context("HIDIOCSFEATURE")?;
+    for _ in 0..10 {
+        std::thread::sleep(Duration::from_millis(30));
+        let mut out = [0u8; REPORT_LEN + 1];
+        feature(f, 0x07, &mut out).context("HIDIOCGFEATURE")?;
+        let mut reply = [0u8; REPORT_LEN];
+        reply.copy_from_slice(&out[1..]);
+        if reply[0] != STATUS_BUSY {
+            if reply[0] != STATUS_OK {
+                bail!("mouse rejected the command (status {:#04x})", reply[0]);
+            }
+            return Ok(reply);
+        }
+    }
+    bail!("mouse stayed busy")
+}
+
+/// Interface number from a hidraw `HID_PHYS` like `usb-0000:0d:00.0-2/input0`.
+fn phys_interface(phys: &str) -> Option<u8> {
+    phys.rsplit('/').next()?.strip_prefix("input")?.parse().ok()
+}
+
+/// The control hidraw node (interface 0) of the Naga V2 HyperSpeed.
+fn find_hidraw() -> Result<String> {
+    let want = format!("HID_ID=0003:{RAZER_VENDOR:08X}:{NAGA_V2_HYPERSPEED:08X}");
+    for e in std::fs::read_dir("/sys/class/hidraw")
+        .context("cannot read /sys/class/hidraw")?
+        .flatten()
+    {
+        let Ok(u) = std::fs::read_to_string(e.path().join("device/uevent")) else {
+            continue;
+        };
+        let phys = u.lines().find_map(|l| l.strip_prefix("HID_PHYS="));
+        if u.lines().any(|l| l == want) && phys.and_then(phys_interface) == Some(0) {
+            return Ok(format!("/dev/{}", e.file_name().to_string_lossy()));
+        }
+    }
+    bail!("Razer Naga V2 HyperSpeed not found")
+}
+
+fn open() -> Result<File> {
+    let path = find_hidraw()?;
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("cannot open {path} (reinstall to get the udev rule)"))
+}
+
+/// Current DPI (X axis) as reported by the mouse.
+pub fn naga_dpi() -> Result<u16> {
+    let r = transfer(&open()?, &get_dpi_report())?;
+    Ok(u16::from_be_bytes([r[9], r[10]]))
+}
+
+/// Set DPI and return the value the mouse reports afterwards.
+pub fn set_naga_dpi(dpi: u16) -> Result<u16> {
+    let f = open()?;
+    transfer(&f, &set_dpi_report(dpi))?;
+    let r = transfer(&f, &get_dpi_report())?;
+    Ok(u16::from_be_bytes([r[9], r[10]]))
 }
 
 #[cfg(test)]
@@ -149,30 +130,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn razer_report_size() {
-        assert_eq!(std::mem::size_of::<RazerReport>(), 90);
+    fn set_dpi_layout() {
+        let r = set_dpi_report(1600);
+        assert_eq!(&r[..8], &[0, 0x1F, 0, 0, 0, 0x07, 0x04, 0x05]);
+        assert_eq!(&r[8..13], &[VARSTORE, 0x06, 0x40, 0x06, 0x40]);
+        assert_eq!(r[88], r[2..88].iter().fold(0, |a, b| a ^ b));
+        assert_eq!(r[89], 0);
     }
 
     #[test]
-    fn set_dpi_xy_layout() {
-        let r = set_dpi_xy_report(1600, 1600);
-        assert_eq!(r.command_class, 0x04);
-        assert_eq!(r.command_id, 0x05);
-        assert_eq!(r.data_size, 0x07);
-        assert_eq!(r.arguments[0], 0x00); // NOSTORE
-        assert_eq!(r.arguments[1], 0x06); // 1600 >> 8
-        assert_eq!(r.arguments[2], 0x40); // 1600 & 0xFF
-        assert_eq!(r.arguments[3], 0x06);
-        assert_eq!(r.arguments[4], 0x40);
-        assert_eq!(r.crc, r.calculate_crc());
+    fn get_dpi_layout() {
+        let r = get_dpi_report();
+        assert_eq!(&r[5..9], &[0x07, 0x04, 0x85, VARSTORE]);
     }
 
     #[test]
     fn dpi_clamped() {
-        let r = set_dpi_xy_report(50, 40000);
-        let x = (r.arguments[1] as u16) << 8 | r.arguments[2] as u16;
-        let y = (r.arguments[3] as u16) << 8 | r.arguments[4] as u16;
-        assert_eq!(x, 100);
-        assert_eq!(y, 30000);
+        assert_eq!(&set_dpi_report(50)[9..11], &DPI_MIN.to_be_bytes());
+        assert_eq!(&set_dpi_report(40000)[9..11], &DPI_MAX.to_be_bytes());
+    }
+
+    #[test]
+    fn feature_ioctl_numbers() {
+        // Same values as the kernel's HIDIOCSFEATURE(91) / HIDIOCGFEATURE(91).
+        assert_eq!(hid_ioc(0x06, 91), 0xC05B_4806);
+        assert_eq!(hid_ioc(0x07, 91), 0xC05B_4807);
+    }
+
+    #[test]
+    fn interface_from_phys() {
+        assert_eq!(phys_interface("usb-0000:0d:00.0-2/input0"), Some(0));
+        assert_eq!(phys_interface("usb-0000:0d:00.0-2/input2"), Some(2));
+        assert_eq!(phys_interface("garbage"), None);
     }
 }

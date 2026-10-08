@@ -87,6 +87,28 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
+    // Hardware check for the Naga DPI driver: `--naga-dpi` reads, `--naga-dpi 1600` sets.
+    if let Some(i) = args.iter().position(|a| a == "--naga-dpi") {
+        let r = match args.get(i + 1).map(|s| s.parse::<u16>()) {
+            None => razer::naga_dpi(),
+            Some(Ok(v)) => razer::set_naga_dpi(v),
+            Some(Err(_)) => {
+                eprintln!("usage: inputforge --naga-dpi [100-30000]");
+                std::process::exit(2);
+            }
+        };
+        match r {
+            Ok(v) => {
+                println!("Razer Naga V2 HyperSpeed: {v} DPI");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("inputforge --naga-dpi: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     if args.iter().any(|a| a == "--apply-lighting") {
         let cfg = config::Config::load().unwrap_or_default();
         for line in lighting::apply_now(&cfg.lighting) {
